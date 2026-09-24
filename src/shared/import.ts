@@ -1,5 +1,5 @@
-import type { Guest, GuestFieldPath } from './types'
-import { emptyGuest, setGuestField } from './types'
+import type { CustomFieldDef, Guest, GuestFieldPath } from './types'
+import { buildGridColumns, DEFAULT_GRID_COLUMNS, emptyGuest, setGuestField } from './types'
 
 export interface ImportedTable {
   headers: string[]
@@ -51,6 +51,35 @@ export function rowsToGuests(table: ImportedTable, mapping: Array<GuestFieldPath
     guests.push(guest)
   }
   return guests
+}
+
+/**
+ * Compute the visible-column order/hidden set for a "less opinionated"
+ * import: when importing into a brand-new/empty document, only the columns
+ * the user actually mapped (built-in or newly-created custom) should end up
+ * visible, in the order they were mapped -- unmapped built-ins (Title,
+ * Address, State, ZIP, etc.) stay hidden rather than cluttering the grid
+ * with columns that have no data. Their data isn't touched -- see
+ * hideColumn/restoreColumn -- only their visibility.
+ */
+export function computeImportColumnVisibility(
+  mapping: Array<GuestFieldPath | null>,
+  existingCustomFieldDefs: CustomFieldDef[],
+  newCustomFields: CustomFieldDef[]
+): { order: string[]; hidden: string[] } {
+  const allColumns = buildGridColumns([...existingCustomFieldDefs, ...newCustomFields])
+  const order: string[] = []
+  const seen = new Set<string>()
+  for (const field of mapping) {
+    if (!field) continue
+    const columnDef = allColumns.find((c) => c.field === field)
+    if (columnDef && !seen.has(columnDef.id)) {
+      seen.add(columnDef.id)
+      order.push(columnDef.id)
+    }
+  }
+  const hidden = DEFAULT_GRID_COLUMNS.map((c) => c.id).filter((id) => !order.includes(id))
+  return { order, hidden }
 }
 
 /** Minimal RFC 4180-ish CSV parser: handles quoted fields, escaped quotes, commas/newlines inside quotes. */

@@ -18,11 +18,13 @@ export function guestWith(fields: Record<string, string>): Guest {
 export function GridHarness({
   initialGuests = [],
   customFieldDefs = [],
-  initialColumnOrder
+  initialColumnOrder,
+  initialHiddenColumns = []
 }: {
   initialGuests?: Guest[]
   customFieldDefs?: CustomFieldDef[]
   initialColumnOrder?: string[]
+  initialHiddenColumns?: string[]
 }): JSX.Element {
   const [guests, setGuests] = useState<Guest[]>(initialGuests)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
@@ -33,6 +35,7 @@ export function GridHarness({
       ...customFieldDefs.map((d) => `custom-${d.id}`)
     ]
   )
+  const [hiddenColumns, setHiddenColumns] = useState<string[]>(initialHiddenColumns)
 
   return (
     <Grid
@@ -40,6 +43,7 @@ export function GridHarness({
       columnWidths={columnWidths}
       customFieldDefs={fields}
       columnOrder={columnOrder}
+      hiddenColumns={hiddenColumns}
       searchQuery=""
       onUpdateGuests={(updater) => setGuests((prev) => updater(prev))}
       onColumnWidthChange={(id, w) => setColumnWidths((prev) => ({ ...prev, [id]: w }))}
@@ -47,6 +51,7 @@ export function GridHarness({
       onDeleteCustomField={(fieldId) => {
         setFields((prev) => prev.filter((d) => d.id !== fieldId))
         setColumnOrder((prev) => prev.filter((id) => id !== `custom-${fieldId}`))
+        setHiddenColumns((prev) => prev.filter((id) => id !== `custom-${fieldId}`))
         setGuests((prev) =>
           prev.map((g) => {
             if (!(fieldId in g.customFields)) return g
@@ -55,6 +60,12 @@ export function GridHarness({
             return { ...g, customFields: rest }
           })
         )
+      }}
+      onHideColumn={(columnId) => setHiddenColumns((prev) => (prev.includes(columnId) ? prev : [...prev, columnId]))}
+      onRestoreColumn={(columnId) => setHiddenColumns((prev) => prev.filter((id) => id !== columnId))}
+      onAddCustomField={(def) => {
+        setFields((prev) => [...prev, def])
+        setColumnOrder((prev) => [...prev, `custom-${def.id}`])
       }}
       onUndo={() => {}}
       onRedo={() => {}}

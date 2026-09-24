@@ -38,10 +38,12 @@ const BUILT_IN_SOURCE_OPTIONS: ExportSourceField[] = [
   'address.address1',
   'address.address2',
   'fullAddressLine',
+  'combinedAddress',
   'address.city',
   'address.state',
   'address.zip',
-  'email'
+  'email',
+  'constant'
 ]
 
 function newColumn(): ExportColumnMapping {
@@ -238,6 +240,15 @@ export default function ExportDialog({
                         </option>
                       ))}
                     </select>
+                    {c.source === 'constant' && (
+                      <input
+                        type="text"
+                        className="export-constant-value"
+                        placeholder="Value for every row"
+                        value={c.constantValue ?? ''}
+                        onChange={(e) => updateColumn(c.id, { constantValue: e.target.value })}
+                      />
+                    )}
                   </td>
                   <td className="export-col-actions">
                     <button onClick={() => moveColumn(c.id, -1)} disabled={i === 0} aria-label="Move up">

@@ -12,9 +12,11 @@ import {
   buildGridColumns,
   customFieldIdForColumn,
   getGuestField,
+  isBuiltInColumn,
   moveColumnId,
   orderGridColumns,
   setGuestField,
+  slugifyFieldId,
   type CustomFieldDef,
   type Guest
 } from '@shared/types'
@@ -37,17 +39,23 @@ import { estimateColumnsForTextarea, isCaretOnFirstVisualLine, isCaretOnLastVisu
 import { autoFitColumnWidth, MIN_COLUMN_WIDTH } from '../lib/columnFit'
 import { buildValueFrequency, suggestCompletion } from '../lib/autocomplete'
 import ContextMenu, { type ContextMenuItem } from './ContextMenu'
+import ContactView from './ContactView'
+import TextPromptModal from './TextPromptModal'
 
 interface GridProps {
   guests: Guest[]
   columnWidths: Record<string, number>
   customFieldDefs: CustomFieldDef[]
   columnOrder: string[]
+  hiddenColumns: string[]
   searchQuery: string
   onUpdateGuests: (updater: (guests: Guest[]) => Guest[]) => void
   onColumnWidthChange: (columnId: string, width: number) => void
   onReorderColumns: (order: string[]) => void
   onDeleteCustomField: (fieldId: string) => void
+  onHideColumn: (columnId: string) => void
+  onRestoreColumn: (columnId: string) => void
+  onAddCustomField: (def: CustomFieldDef) => void
   onUndo: () => void
   onRedo: () => void
 }
@@ -105,16 +113,31 @@ export default function Grid({
   columnWidths,
   customFieldDefs,
   columnOrder,
+  hiddenColumns,
   searchQuery,
   onUpdateGuests,
   onColumnWidthChange,
   onReorderColumns,
   onDeleteCustomField,
+  onHideColumn,
+  onRestoreColumn,
+  onAddCustomField,
   onUndo,
   onRedo
 }: GridProps): JSX.Element {
   const naturalColumns = useMemo(() => buildGridColumns(customFieldDefs), [customFieldDefs])
-  const columns = useMemo(() => orderGridColumns(naturalColumns, columnOrder), [naturalColumns, columnOrder])
+  const orderedColumns = useMemo(
+    () => orderGridColumns(naturalColumns, columnOrder),
+    [naturalColumns, columnOrder]
+  )
+  const columns = useMemo(
+    () => orderedColumns.filter((c) => !hiddenColumns.includes(c.id)),
+    [orderedColumns, hiddenColumns]
+  )
+  const hiddenBuiltInColumns = useMemo(
+    () => naturalColumns.filter((c) => isBuiltInColumn(c) && hiddenColumns.includes(c.id)),
+    [naturalColumns, hiddenColumns]
+  )
   const rowCount = totalRowCount(guests.length)
 
   const [selection, setSelection] = useState<SelectionRange>({
@@ -130,6 +153,9 @@ export default function Grid({
   const columnDragRef = useRef<{ columnId: string; startX: number; startY: number; dragging: boolean } | null>(
     null
   )
+  const [contactViewRow, setContactViewRow] = useState<number | null>(null)
+  const [addColumnMenu, setAddColumnMenu] = useState<{ x: number; y: number } | null>(null)
+  const [creatingCustomField, setCreatingCustomField] = useState(false)
 
   const isMouseSelecting = useRef(false)
   const dragModeRef = useRef<'select' | 'pending-move' | 'move'>('select')
@@ -198,6 +224,27 @@ export default function Grid({
       })
     },
     [onUpdateGuests, columns]
+  )
+
+  /** Apply an updater to a single guest by row index, e.g. from Contact View. One undo-stack entry per call. */
+  const updateGuestByRow = useCallback(
+    (row: number, updater: (guest: Guest) => Guest) => {
+      onUpdateGuests((prev) => {
+        if (!prev[row]) return prev
+        const next = prev.slice()
+        next[row] = updater(next[row])
+        return next
+      })
+    },
+    [onUpdateGuests]
+  )
+
+  const openContactView = useCallback(
+    (row: number) => {
+      if (!guests[row]) return // don't open on a blank buffer row -- there's nothing to edit yet
+      setContactViewRow(row)
+    },
+    [guests]
   )
 
   const resizeEditInput = useCallback(() => {
@@ -461,9 +508,15 @@ export default function Grid({
         moveSelectionAndScroll(row, col + (e.shiftKey ? -1 : 1), false)
         return
       case 'Enter':
-        // Not editing: Enter moves down, matching normal spreadsheet feel
-        // (F2 / double-click / typing are what open the editor).
         e.preventDefault()
+        // A whole row selected (via the row header) is only reachable
+        // deliberately, so Enter there opens Contact View instead of the
+        // normal "move down" -- a single selected cell still just moves down
+        // (F2 / double-click / typing are what open the cell editor).
+        if (isWholeRowSelected(row) && guests[row]) {
+          openContactView(row)
+          return
+        }
         moveSelectionAndScroll(row + 1, col, false)
         return
       case 'F2':
@@ -675,6 +728,31 @@ export default function Grid({
     [columns, rowCount]
   )
 
+  // --- Row header: select row / open Contact View --------------------------
+  const selectRow = useCallback(
+    (row: number) => {
+      setSelection({ anchor: { row, col: 0 }, focus: { row, col: columns.length - 1 } })
+      focusWrapper()
+    },
+    [columns.length]
+  )
+
+  const handleRowHeaderMouseDown = (row: number): void => {
+    if (editingCell) stopEditing(true)
+    setContextMenu(null)
+    setColumnMenu(null)
+    selectRow(row)
+  }
+
+  /** True when the *entire* row (every column), not just a cell within it, is selected -- only reachable via the row header. */
+  const isWholeRowSelected = useCallback(
+    (row: number): boolean => {
+      const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
+      return rowStart === row && rowEnd === row && colStart === 0 && colEnd === columns.length - 1
+    },
+    [selection, columns.length]
+  )
+
   const handleHeaderMouseDown = (columnId: string, e: ReactMouseEvent): void => {
     if (e.button !== 0) return
     e.preventDefault() // avoid native text-selection drag across header labels
@@ -734,21 +812,50 @@ export default function Grid({
 
   const columnMenuItemsFor = (columnId: string): ContextMenuItem[] => {
     const def = columns.find((c) => c.id === columnId)
-    const fieldId = def ? customFieldIdForColumn(def) : null
+    if (!def) return []
+    const fieldId = customFieldIdForColumn(def)
+    const builtIn = isBuiltInColumn(def)
     return [
       {
         label: 'Delete Column',
-        disabled: !fieldId,
-        disabledReason: "Built-in columns can't be deleted",
         onSelect: () => {
-          if (!def || !fieldId) return
-          const confirmed = window.confirm(
-            `Delete the "${def.label}" column? This removes it and its data from every guest. This can't be undone.`
-          )
-          if (confirmed) onDeleteCustomField(fieldId)
+          if (builtIn) {
+            // Built-ins can't be structurally removed from the guest model,
+            // so "deleting" one just hides it from the grid -- its data is
+            // kept and it can be brought back from "+ Add Column".
+            const confirmed = window.confirm(
+              `Remove the "${def.label}" column from view? Its data is kept, and you can bring it back later from "+ Add Column".`
+            )
+            if (confirmed) onHideColumn(def.id)
+          } else if (fieldId) {
+            const confirmed = window.confirm(
+              `Delete the "${def.label}" column? This removes it and its data from every guest. This can't be undone.`
+            )
+            if (confirmed) onDeleteCustomField(fieldId)
+          }
         }
       }
     ]
+  }
+
+  const addColumnMenuItems: ContextMenuItem[] = [
+    ...hiddenBuiltInColumns.map((c) => ({
+      label: `Show "${c.label}"`,
+      onSelect: () => onRestoreColumn(c.id)
+    })),
+    {
+      label: '+ New Custom Field',
+      onSelect: () => setCreatingCustomField(true)
+    }
+  ]
+
+  const handleCreateCustomField = (label: string): void => {
+    const id = slugifyFieldId(
+      label,
+      customFieldDefs.map((d) => d.id)
+    )
+    onAddCustomField({ id, label })
+    setCreatingCustomField(false)
   }
 
   const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
@@ -785,6 +892,7 @@ export default function Grid({
           {columns.map((c) => (
             <col key={c.id} style={{ width: widthFor(c.id) }} />
           ))}
+          <col className="col-add-col" />
         </colgroup>
         <thead>
           <tr>
@@ -824,6 +932,20 @@ export default function Grid({
                 />
               </th>
             ))}
+            <th className="col-add-header">
+              <button
+                type="button"
+                className="col-add-button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setAddColumnMenu({ x: e.clientX, y: e.clientY })
+                }}
+                aria-label="Add column"
+                title="Add column"
+              >
+                +
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -836,7 +958,13 @@ export default function Grid({
 
             return (
               <tr key={row} className={dimmed ? 'row-dimmed' : highlighted ? 'row-highlighted' : ''}>
-                <td className="row-header-cell">{row + 1}</td>
+                <td
+                  className={`row-header-cell${isWholeRowSelected(row) ? ' row-header-selected' : ''}`}
+                  onMouseDown={() => handleRowHeaderMouseDown(row)}
+                  onDoubleClick={() => openContactView(row)}
+                >
+                  {row + 1}
+                </td>
                 {columns.map((c, col) => {
                   const isEditing = editingCell?.row === row && editingCell?.col === col
                   const isSelected =
@@ -907,6 +1035,7 @@ export default function Grid({
                     </td>
                   )
                 })}
+                <td className="col-add-cell" />
               </tr>
             )
           })}
@@ -922,6 +1051,32 @@ export default function Grid({
           y={columnMenu.y}
           items={columnMenuItemsFor(columnMenu.columnId)}
           onClose={() => setColumnMenu(null)}
+        />
+      )}
+      {addColumnMenu && (
+        <ContextMenu
+          x={addColumnMenu.x}
+          y={addColumnMenu.y}
+          items={addColumnMenuItems}
+          onClose={() => setAddColumnMenu(null)}
+        />
+      )}
+      {creatingCustomField && (
+        <TextPromptModal
+          title="New Custom Field"
+          label="Field name"
+          placeholder="e.g. Dietary Restrictions"
+          confirmLabel="Create"
+          onConfirm={handleCreateCustomField}
+          onCancel={() => setCreatingCustomField(false)}
+        />
+      )}
+      {contactViewRow !== null && guests[contactViewRow] && (
+        <ContactView
+          guest={guests[contactViewRow]}
+          customFieldDefs={customFieldDefs}
+          onUpdateGuest={(updater) => updateGuestByRow(contactViewRow, updater)}
+          onClose={() => setContactViewRow(null)}
         />
       )}
     </div>

@@ -258,6 +258,12 @@ textarea {
   user-select: none;
   vertical-align: top;
   padding-top: 8px;
+  cursor: pointer;
+}
+
+.row-header-selected {
+  background: var(--color-selection);
+  color: var(--color-text);
 }
 
 .col-header {
@@ -659,6 +665,10 @@ thead tr .row-header-cell {
   padding: 5px 6px;
 }
 
+.export-constant-value {
+  margin-top: 4px;
+}
+
 .export-col-actions {
   white-space: nowrap;
   text-align: center;
@@ -749,4 +759,129 @@ thead tr .row-header-cell {
 .error-dialog p {
   margin: 0 0 4px;
   font-size: 14px;
+}
+
+/* Contact View ------------------------------------------------------------ */
+
+.contact-view-modal {
+  width: 460px;
+}
+
+.contact-name-bar {
+  margin-bottom: 18px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 7px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.segmented-option {
+  border: none;
+  background: var(--color-bg);
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.segmented-option + .segmented-option {
+  border-left: 1px solid var(--color-border-strong);
+}
+
+.segmented-option-active {
+  background: var(--color-selection);
+  color: var(--color-text);
+}
+
+.contact-field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.contact-field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.contact-field-row .contact-field {
+  flex: 1;
+}
+
+.contact-field input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-bg);
+}
+
+.contact-section {
+  margin-bottom: 18px;
+}
+
+.contact-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+}
+
+.contact-combined-address {
+  margin-top: 4px;
+}
+
+.contact-combined-address pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+/* "+ Add Column" trailing header cell -------------------------------------- */
+
+.col-add-col {
+  width: 40px;
+}
+
+.col-add-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.col-add-button {
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.col-add-button:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.col-add-cell {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+  padding: 0;
 }

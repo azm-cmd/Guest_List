@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { emptyGuest, setGuestField } from './types'
+import {
+  builtInPresets,
+  constantColumn,
+  defaultAddressColumns,
+  emptyGuest,
+  paperlessPostColumns,
+  setGuestField
+} from './types'
 import { buildExportRows, filterGuestsForExport, guestMatchesFilter, hasCompleteAddress, hasEmail, toCsv } from './export'
 
 function guestWith(fields: Record<string, string>): ReturnType<typeof emptyGuest> {
@@ -84,5 +91,54 @@ describe('buildExportRows + toCsv', () => {
   it('produces CRLF-terminated, comma-escaped CSV', () => {
     const csv = toCsv(['A', 'B'], [['has, comma', 'plain']])
     expect(csv).toBe('A,B\r\n"has, comma",plain\r\n')
+  })
+
+  it('a "constant" source outputs the same fixed value for every row, independent of the guest', () => {
+    const { rows } = buildExportRows([addressOnlyGuest, bothGuest], 'all', [
+      { id: '1', outputLabel: 'Name', source: 'fullName' },
+      constantColumn('Total Invited', '2')
+    ])
+    expect(rows).toEqual([
+      ['Ann Lee', '2'],
+      ['Cy Ng', '2']
+    ])
+  })
+
+  it('a "combinedAddress" source produces a two-line address', () => {
+    const { rows } = buildExportRows([addressOnlyGuest], 'all', [{ id: '1', outputLabel: 'Addr', source: 'combinedAddress' }])
+    expect(rows).toEqual([['1 Main St\nSpringfield, IL 62704']])
+  })
+})
+
+describe('Avery Labels preset', () => {
+  it('excludes any guest with an email on file, whether or not they also have an address', () => {
+    const preset = builtInPresets().find((p) => p.id === 'preset-avery-labels')!
+    expect(preset.filter).toBe('addressOnly')
+    const guests = [addressOnlyGuest, emailOnlyGuest, bothGuest, neitherGuest]
+    const included = filterGuestsForExport(guests, preset.filter)
+    expect(included).toEqual([addressOnlyGuest])
+    expect(included).not.toContain(bothGuest)
+    expect(included).not.toContain(emailOnlyGuest)
+  })
+
+  it('columns are Title/First/Last/Address fields', () => {
+    const preset = builtInPresets().find((p) => p.id === 'preset-avery-labels')!
+    expect(preset.columns.map((c) => c.source)).toEqual(defaultAddressColumns().map((c) => c.source))
+  })
+})
+
+describe('Paperless Post preset', () => {
+  it('outputs Name (auto full name), Email, and a Total Invited constant column defaulting to 2', () => {
+    const preset = builtInPresets().find((p) => p.id === 'preset-paperless-post')!
+    expect(preset.filter).toBe('hasEmail')
+    const { header, rows } = buildExportRows([bothGuest], preset.filter, preset.columns)
+    expect(header).toEqual(['Name', 'Email', 'Total Invited'])
+    expect(rows).toEqual([['Cy Ng', 'cy@example.com', '2']])
+  })
+
+  it('the Total Invited default can be changed per-column', () => {
+    const columns = paperlessPostColumns().map((c) => (c.source === 'constant' ? { ...c, constantValue: '4' } : c))
+    const { rows } = buildExportRows([bothGuest], 'hasEmail', columns)
+    expect(rows).toEqual([['Cy Ng', 'cy@example.com', '4']])
   })
 })

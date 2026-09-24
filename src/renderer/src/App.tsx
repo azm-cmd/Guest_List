@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CustomFieldDef, GuestFieldPath, GuestListDocument } from '@shared/types'
 import { buildGridColumns, CURRENT_FORMAT_VERSION, emptyDocument, getGuestField, migrateDocument } from '@shared/types'
 import type { ImportedTable } from '@shared/import'
-import { parseCsv, rowsToGuests } from '@shared/import'
+import { computeImportColumnVisibility, parseCsv, rowsToGuests } from '@shared/import'
 import { parseXlsx } from '@shared/importXlsx'
 import { toCsv } from '@shared/export'
 import { sanitizeFileName } from '@shared/filename'
@@ -178,10 +178,26 @@ export default function App(): JSX.Element {
   const handleConfirmImport = useCallback(
     (mapping: Parameters<typeof rowsToGuests>[1], newCustomFields: CustomFieldDef[]) => {
       if (!pendingImportTable) return
+      // Importing into a brand-new/empty document is the "less opinionated"
+      // case: only the columns the user actually mapped (built-in or new
+      // custom) should end up visible, in the order they were mapped --
+      // not all 9 default built-ins whether or not they were used. Importing
+      // into a document that already has guests never auto-hides existing
+      // visible columns.
+      const importingIntoEmptyDoc = controller.guests.length === 0
       if (newCustomFields.length > 0) controller.addCustomFields(newCustomFields)
       const imported = rowsToGuests(pendingImportTable, mapping)
       controller.updateGuests((prev) => [...prev, ...imported])
       setPendingImportTable(null)
+
+      if (importingIntoEmptyDoc) {
+        const { order, hidden } = computeImportColumnVisibility(
+          mapping,
+          controller.doc.customFieldDefs,
+          newCustomFields
+        )
+        controller.setColumnVisibility(order, hidden)
+      }
 
       // Auto-fit every mapped column to the imported content so a wide,
       // horizontally-laid-out spreadsheet doesn't get squeezed into narrow
@@ -260,11 +276,15 @@ export default function App(): JSX.Element {
         columnWidths={controller.doc.columnWidths}
         customFieldDefs={controller.doc.customFieldDefs}
         columnOrder={controller.doc.columnOrder}
+        hiddenColumns={controller.doc.hiddenColumns}
         searchQuery={searchQuery}
         onUpdateGuests={controller.updateGuests}
         onColumnWidthChange={controller.setColumnWidth}
         onReorderColumns={controller.setColumnOrder}
         onDeleteCustomField={controller.deleteCustomField}
+        onHideColumn={controller.hideColumn}
+        onRestoreColumn={controller.restoreColumn}
+        onAddCustomField={(def) => controller.addCustomFields([def])}
         onUndo={controller.undo}
         onRedo={controller.redo}
       />

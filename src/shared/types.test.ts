@@ -97,13 +97,15 @@ describe('exportSourceLabel', () => {
 })
 
 describe('migrateDocument', () => {
-  it('defaults customFieldDefs, columnOrder and per-guest customFields for older saved files', () => {
+  it('defaults customFieldDefs, columnOrder, hiddenColumns and per-guest customFields for older saved files', () => {
     const legacyDoc = emptyDocument()
     // Simulate a file saved before this feature existed.
     // @ts-expect-error intentionally constructing a legacy shape
     delete legacyDoc.customFieldDefs
     // @ts-expect-error intentionally constructing a legacy shape
     delete legacyDoc.columnOrder
+    // @ts-expect-error intentionally constructing a legacy shape (pre-dates hideable columns)
+    delete legacyDoc.hiddenColumns
     const legacyGuest = emptyGuest('1')
     // @ts-expect-error intentionally constructing a legacy shape
     delete legacyGuest.customFields
@@ -112,6 +114,7 @@ describe('migrateDocument', () => {
     const migrated = migrateDocument(legacyDoc)
     expect(migrated.customFieldDefs).toEqual([])
     expect(migrated.columnOrder).toEqual([])
+    expect(migrated.hiddenColumns).toEqual([])
     expect(migrated.guests[0].customFields).toEqual({})
     // Even with an empty saved order, the columns still resolve correctly (self-healing).
     expect(orderGridColumns(buildGridColumns([]), migrated.columnOrder)).toEqual(DEFAULT_GRID_COLUMNS)
@@ -260,5 +263,26 @@ describe('save/reopen persistence (JSON round-trip, as the .guestlist file forma
 
     const reopened = roundTrip(doc)
     expect(getGuestField(reopened.guests[0], 'email')).toBe('jane@example.com')
+  })
+
+  it('preserves hidden (non-destructive) built-in columns, and their data, across save/reopen', () => {
+    let doc = emptyDocument()
+    doc = { ...doc, hiddenColumns: ['title', 'address2'] }
+    let guest = emptyGuest('1')
+    guest = setGuestField(guest, 'title', 'Mr.')
+    guest = setGuestField(guest, 'firstName', 'John')
+    doc = { ...doc, guests: [guest] }
+
+    const reopened = roundTrip(doc)
+    expect(reopened.hiddenColumns).toEqual(['title', 'address2'])
+    // Data behind a hidden column is untouched -- hiding is display-only.
+    expect(getGuestField(reopened.guests[0], 'title')).toBe('Mr.')
+
+    const visible = orderGridColumns(buildGridColumns([]), reopened.columnOrder).filter(
+      (c) => !reopened.hiddenColumns.includes(c.id)
+    )
+    expect(visible.map((c) => c.id)).not.toContain('title')
+    expect(visible.map((c) => c.id)).not.toContain('address2')
+    expect(visible.map((c) => c.id)).toContain('firstName')
   })
 })

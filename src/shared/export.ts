@@ -1,5 +1,6 @@
-import type { ExportColumnMapping, ExportFilterKind, ExportSourceField, Guest } from './types'
+import type { ExportColumnMapping, ExportFilterKind, Guest } from './types'
 import { getGuestField } from './types'
+import { computeCombinedAddress, computeFullName } from './contact'
 
 export function hasCompleteAddress(guest: Guest): boolean {
   const { address1, city, state, zip } = guest.address
@@ -31,12 +32,19 @@ export function filterGuestsForExport(guests: Guest[], filter: ExportFilterKind)
   return guests.filter((g) => guestMatchesFilter(g, filter))
 }
 
-function resolveSourceValue(guest: Guest, source: ExportSourceField): string {
+function resolveSourceValue(guest: Guest, column: ExportColumnMapping): string {
+  const { source } = column
+  if (source === 'constant') {
+    return column.constantValue ?? ''
+  }
   if (source === 'fullName') {
-    return [guest.title, guest.firstName, guest.lastName].filter((s) => s.trim()).join(' ')
+    return computeFullName(guest)
   }
   if (source === 'fullAddressLine') {
     return [guest.address.address1, guest.address.address2].filter((s) => s.trim()).join(', ')
+  }
+  if (source === 'combinedAddress') {
+    return computeCombinedAddress(guest)
   }
   return getGuestField(guest, source)
 }
@@ -48,7 +56,7 @@ export function buildExportRows(
 ): { header: string[]; rows: string[][] } {
   const filtered = filterGuestsForExport(guests, filter)
   const header = columns.map((c) => c.outputLabel)
-  const rows = filtered.map((guest) => columns.map((c) => resolveSourceValue(guest, c.source)))
+  const rows = filtered.map((guest) => columns.map((c) => resolveSourceValue(guest, c)))
   return { header, rows }
 }
 

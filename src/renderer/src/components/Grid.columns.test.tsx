@@ -50,24 +50,62 @@ describe('column action menu', () => {
     expect(screen.getByText('Delete Column')).toBeTruthy()
   })
 
-  it('Delete Column is disabled for built-in columns, with an explanation', () => {
-    render(<Harness />)
-    const menuButton = headerFor('First Name').querySelector('.col-menu-button') as HTMLElement
-    fireEvent.click(menuButton)
-    const deleteItem = screen.getByText('Delete Column') as HTMLButtonElement
-    expect(deleteItem.disabled).toBe(true)
-    expect(deleteItem.title).toMatch(/built-in/i)
-  })
-
-  it('clicking disabled Delete Column on a built-in column does nothing (native disabled buttons do not fire click)', () => {
+  it('deleting a built-in column hides it (non-destructive) rather than deleting data', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<Harness initialGuests={[guestWith({ firstName: 'Safe' })]} />)
     const menuButton = headerFor('First Name').querySelector('.col-menu-button') as HTMLElement
     fireEvent.click(menuButton)
     fireEvent.click(screen.getByText('Delete Column'))
+
+    expect(window.confirm).toHaveBeenCalled()
+    // The confirm message should make clear this is non-destructive.
+    expect((window.confirm as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/kept/i)
+    expect(screen.queryByText('First Name')).toBeNull()
+    // The column is gone from the grid, but the underlying guest data was never touched.
+  })
+
+  it('declining the confirmation keeps a built-in column visible', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<Harness initialGuests={[guestWith({ firstName: 'Safe' })]} />)
+    const menuButton = headerFor('First Name').querySelector('.col-menu-button') as HTMLElement
+    fireEvent.click(menuButton)
+    fireEvent.click(screen.getByText('Delete Column'))
+
+    expect(screen.getByText('First Name')).toBeTruthy()
     expect(displayIn(cellAt(0, 1))).toBe('Safe')
-    // A disabled <button> doesn't dispatch click at all, so the menu stays open -- confirming
-    // the click genuinely had no effect rather than silently closing after a no-op action.
-    expect(screen.getByText('Delete Column')).toBeTruthy()
+  })
+})
+
+describe('"+ Add Column": restoring hidden built-ins and creating custom fields', () => {
+  it('lists hidden built-in columns to restore, and restoring brings the column (and its data) back', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<Harness initialGuests={[guestWith({ firstName: 'Jane', title: 'Ms.' })]} />)
+
+    // Hide "Title" via its column menu.
+    const titleMenuButton = headerFor('Title').querySelector('.col-menu-button') as HTMLElement
+    fireEvent.click(titleMenuButton)
+    fireEvent.click(screen.getByText('Delete Column'))
+    expect(screen.queryByText('Title')).toBeNull()
+
+    // Restore it from "+ Add Column".
+    const addButton = screen.getByLabelText('Add column')
+    fireEvent.click(addButton)
+    fireEvent.click(screen.getByText('Show "Title"'))
+
+    expect(screen.getByText('Title')).toBeTruthy()
+    expect(displayIn(cellAt(0, 0))).toBe('Ms.') // the data survived being hidden
+  })
+
+  it('creates a new custom field from the grid via "+ New Custom Field"', () => {
+    render(<Harness />)
+    const addButton = screen.getByLabelText('Add column')
+    fireEvent.click(addButton)
+    fireEvent.click(screen.getByText('+ New Custom Field'))
+
+    fireEvent.change(screen.getByLabelText('Field name'), { target: { value: 'Dietary Restrictions' } })
+    fireEvent.click(screen.getByText('Create'))
+
+    expect(screen.getByText('Dietary Restrictions')).toBeTruthy()
   })
 })
 

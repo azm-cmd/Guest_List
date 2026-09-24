@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { guessColumnMapping, parseCsv, rowsToGuests } from './import'
-import { getGuestField } from './types'
+import { computeImportColumnVisibility, guessColumnMapping, parseCsv, rowsToGuests } from './import'
+import { DEFAULT_GRID_COLUMNS, getGuestField } from './types'
 
 describe('parseCsv', () => {
   it('parses a simple table with a header row', () => {
@@ -75,5 +75,46 @@ describe('rowsToGuests', () => {
     const table = { headers: ['First', 'Junk'], rows: [['Jane', 'noise']] }
     const guests = rowsToGuests(table, ['firstName', null])
     expect(getGuestField(guests[0], 'firstName')).toBe('Jane')
+  })
+})
+
+describe('computeImportColumnVisibility (less-opinionated import)', () => {
+  it('only shows the mapped built-in columns, in mapped order -- not every default column', () => {
+    const { order, hidden } = computeImportColumnVisibility(['firstName', 'lastName', 'email'], [], [])
+    expect(order).toEqual(['firstName', 'lastName', 'email'])
+    // Everything else (Title, Address 1/2, City, State, ZIP) stays hidden.
+    const stillHidden = DEFAULT_GRID_COLUMNS.map((c) => c.id).filter((id) => !order.includes(id))
+    expect(hidden).toEqual(stillHidden)
+    expect(hidden).toContain('title')
+    expect(hidden).toContain('address1')
+    expect(hidden).toContain('state')
+    expect(hidden).toContain('zip')
+  })
+
+  it('includes newly-created custom columns in the mapped order', () => {
+    const { order, hidden } = computeImportColumnVisibility(
+      ['firstName', 'lastName', 'custom.phone', 'custom.notes'],
+      [],
+      [
+        { id: 'phone', label: 'Phone' },
+        { id: 'notes', label: 'Notes' }
+      ]
+    )
+    expect(order).toEqual(['firstName', 'lastName', 'custom-phone', 'custom-notes'])
+    expect(hidden).not.toContain('custom-phone')
+  })
+
+  it('ignores unmapped (null) source columns', () => {
+    const { order } = computeImportColumnVisibility(['firstName', null, 'email'], [], [])
+    expect(order).toEqual(['firstName', 'email'])
+  })
+
+  it('mapping every field leaves nothing hidden', () => {
+    const { hidden } = computeImportColumnVisibility(
+      ['title', 'firstName', 'lastName', 'address.address1', 'address.address2', 'address.city', 'address.state', 'address.zip', 'email'],
+      [],
+      []
+    )
+    expect(hidden).toEqual([])
   })
 })

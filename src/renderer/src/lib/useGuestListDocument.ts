@@ -18,6 +18,9 @@ export interface GuestListController {
   setColumnWidth: (columnId: string, width: number) => void
   addCustomFields: (defs: CustomFieldDef[]) => void
   setColumnOrder: (order: string[]) => void
+  setColumnVisibility: (order: string[], hidden: string[]) => void
+  hideColumn: (columnId: string) => void
+  restoreColumn: (columnId: string) => void
   deleteCustomField: (fieldId: string) => void
   undo: () => void
   redo: () => void
@@ -91,6 +94,35 @@ export function useGuestListDocument(initial: GuestListDocument): GuestListContr
     setIsDirty(true)
   }, [])
 
+  /** Set both display order and hidden columns atomically (e.g. after a less-opinionated import). */
+  const setColumnVisibility = useCallback((order: string[], hidden: string[]) => {
+    setDoc((prev) => ({ ...prev, columnOrder: order, hiddenColumns: hidden, updatedAt: new Date().toISOString() }))
+    setIsDirty(true)
+  }, [])
+
+  /**
+   * Non-destructively remove a built-in column from view. Unlike
+   * deleteCustomField, this never touches guest data, customFieldDefs, or
+   * export presets -- the column can always be brought back via
+   * restoreColumn, and anything already exporting from it keeps working.
+   */
+  const hideColumn = useCallback((columnId: string) => {
+    setDoc((prev) => {
+      if (prev.hiddenColumns.includes(columnId)) return prev
+      return { ...prev, hiddenColumns: [...prev.hiddenColumns, columnId], updatedAt: new Date().toISOString() }
+    })
+    setIsDirty(true)
+  }, [])
+
+  const restoreColumn = useCallback((columnId: string) => {
+    setDoc((prev) => ({
+      ...prev,
+      hiddenColumns: prev.hiddenColumns.filter((id) => id !== columnId),
+      updatedAt: new Date().toISOString()
+    }))
+    setIsDirty(true)
+  }, [])
+
   /**
    * Delete a custom column: drops its definition, its display-order entry,
    * its value from every guest, and any export-preset columns that source
@@ -111,6 +143,7 @@ export function useGuestListDocument(initial: GuestListDocument): GuestListContr
         ...prev,
         customFieldDefs: prev.customFieldDefs.filter((d) => d.id !== fieldId),
         columnOrder: prev.columnOrder.filter((id) => id !== columnId),
+        hiddenColumns: prev.hiddenColumns.filter((id) => id !== columnId),
         exportPresets: prev.exportPresets.map((preset) => ({
           ...preset,
           columns: preset.columns.filter((c) => c.source !== `custom.${fieldId}`)
@@ -162,6 +195,9 @@ export function useGuestListDocument(initial: GuestListDocument): GuestListContr
     setColumnWidth,
     addCustomFields,
     setColumnOrder,
+    setColumnVisibility,
+    hideColumn,
+    restoreColumn,
     deleteCustomField,
     undo,
     redo,

@@ -226,8 +226,14 @@ export const EXPORT_FILTER_LABELS: Record<ExportFilterKind, string> = {
   hasEmail: 'Any guest with an email'
 }
 
-/** A source a mapped output column can pull from. Includes a couple of convenience composites. */
-export type ExportSourceField = GuestFieldPath | 'fullName' | 'fullAddressLine'
+/**
+ * A source a mapped output column can pull from. Includes a few convenience
+ * composites -- `combinedAddress` and `fullName` are always auto-generated
+ * from structured data (see shared/contact.ts), never typed in directly.
+ * `constant` is an export-only column with no guest source at all (e.g. a
+ * "Total Invited" column that doesn't exist in the spreadsheet).
+ */
+export type ExportSourceField = GuestFieldPath | 'fullName' | 'fullAddressLine' | 'combinedAddress' | 'constant'
 
 type BuiltInExportSourceField = Exclude<ExportSourceField, `custom.${string}`>
 
@@ -239,10 +245,12 @@ export const EXPORT_SOURCE_LABELS: Record<BuiltInExportSourceField, string> = {
   'address.address1': 'Address 1',
   'address.address2': 'Address 2',
   fullAddressLine: 'Address 1 + 2 (combined)',
+  combinedAddress: 'Combined Address (multi-line)',
   'address.city': 'City',
   'address.state': 'State',
   'address.zip': 'ZIP',
-  email: 'Email'
+  email: 'Email',
+  constant: 'Fixed Value (export-only)'
 }
 
 /** Human-readable label for an export source, including user-defined custom columns. */
@@ -258,6 +266,8 @@ export interface ExportColumnMapping {
   id: string
   outputLabel: string
   source: ExportSourceField
+  /** Only used when source === 'constant': the fixed value every row gets. */
+  constantValue?: string
 }
 
 export interface ExportPreset {
@@ -271,6 +281,11 @@ export interface ExportPreset {
 
 function col(outputLabel: string, source: ExportSourceField): ExportColumnMapping {
   return { id: crypto.randomUUID(), outputLabel, source }
+}
+
+/** An export-only column with a fixed value for every row (e.g. "Total Invited"). */
+export function constantColumn(outputLabel: string, value: string): ExportColumnMapping {
+  return { id: crypto.randomUUID(), outputLabel, source: 'constant', constantValue: value }
 }
 
 export function defaultAddressColumns(): ExportColumnMapping[] {
@@ -290,11 +305,19 @@ export function defaultEmailColumns(): ExportColumnMapping[] {
   return [col('First Name', 'firstName'), col('Last Name', 'lastName'), col('Email', 'email')]
 }
 
+/** Paperless Post's default output: an auto-generated full name, email, and an export-only "Total Invited" column. */
+export function paperlessPostColumns(): ExportColumnMapping[] {
+  return [col('Name', 'fullName'), col('Email', 'email'), constantColumn('Total Invited', '2')]
+}
+
 export function builtInPresets(): ExportPreset[] {
   return [
     {
       id: 'preset-avery-labels',
       name: 'Avery Labels',
+      // Avery mailing labels are for guests reachable only by mail: anyone
+      // with an email on file is excluded, whether or not they also have an
+      // address (see guestMatchesFilter's 'addressOnly' case in export.ts).
       filter: 'addressOnly',
       columns: defaultAddressColumns(),
       format: 'csv',
@@ -304,7 +327,7 @@ export function builtInPresets(): ExportPreset[] {
       id: 'preset-paperless-post',
       name: 'Paperless Post',
       filter: 'hasEmail',
-      columns: defaultEmailColumns(),
+      columns: paperlessPostColumns(),
       format: 'csv',
       builtIn: true
     }
@@ -329,6 +352,13 @@ export interface GuestListDocument {
   customFieldDefs: CustomFieldDef[]
   /** Column display order, as column ids (see GridColumnDef.id). Self-healing via orderGridColumns. */
   columnOrder: string[]
+  /**
+   * Column ids hidden from the grid (non-destructive -- used for built-in
+   * columns like Title/Email/Address 2 the user doesn't need visible; their
+   * guest data is untouched and exports referencing them still work).
+   * Custom columns are removed outright instead (see deleteCustomField).
+   */
+  hiddenColumns: string[]
 }
 
 export function emptyDocument(title = 'Untitled Guest List'): GuestListDocument {
@@ -343,7 +373,8 @@ export function emptyDocument(title = 'Untitled Guest List'): GuestListDocument 
     exportPresets: builtInPresets(),
     columnWidths: {},
     customFieldDefs: [],
-    columnOrder: DEFAULT_GRID_COLUMNS.map((c) => c.id)
+    columnOrder: DEFAULT_GRID_COLUMNS.map((c) => c.id),
+    hiddenColumns: []
   }
 }
 
@@ -357,6 +388,7 @@ export function migrateDocument(doc: GuestListDocument): GuestListDocument {
     ...doc,
     customFieldDefs: doc.customFieldDefs ?? [],
     columnOrder: doc.columnOrder ?? [],
+    hiddenColumns: doc.hiddenColumns ?? [],
     guests: doc.guests.map((g) => (g.customFields ? g : { ...g, customFields: {} }))
   }
 }
