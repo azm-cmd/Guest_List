@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import type { GuestFieldPath } from '@shared/types'
+import { slugifyFieldId, type CustomFieldDef, type GuestFieldPath } from '@shared/types'
 import type { ImportedTable } from '@shared/import'
 import { guessColumnMapping } from '@shared/import'
 
 interface ImportMappingDialogProps {
   table: ImportedTable
-  onConfirm: (mapping: Array<GuestFieldPath | null>) => void
+  existingCustomFields: CustomFieldDef[]
+  onConfirm: (mapping: Array<GuestFieldPath | null>, newCustomFields: CustomFieldDef[]) => void
   onCancel: () => void
 }
 
@@ -22,21 +23,42 @@ const FIELD_OPTIONS: Array<{ value: GuestFieldPath | ''; label: string }> = [
   { value: 'email', label: 'Email' }
 ]
 
+const NEW_COLUMN_SENTINEL = '__new_column__'
 const PREVIEW_ROWS = 5
 
 export default function ImportMappingDialog({
   table,
+  existingCustomFields,
   onConfirm,
   onCancel
 }: ImportMappingDialogProps): JSX.Element {
   const [mapping, setMapping] = useState<Array<GuestFieldPath | null>>(() =>
     guessColumnMapping(table.headers)
   )
+  // Custom columns created during THIS import session (in addition to any that already existed).
+  const [newCustomFields, setNewCustomFields] = useState<CustomFieldDef[]>([])
 
-  const setColumnField = (index: number, field: GuestFieldPath | ''): void => {
+  const allCustomFields = [...existingCustomFields, ...newCustomFields]
+
+  const setColumnField = (index: number, value: string): void => {
+    if (value === NEW_COLUMN_SENTINEL) {
+      const label = window.prompt('Name for the new column:')?.trim()
+      if (!label) return // cancelled or empty -- leave this column's mapping unchanged
+      const id = slugifyFieldId(
+        label,
+        allCustomFields.map((d) => d.id)
+      )
+      setNewCustomFields((prev) => [...prev, { id, label }])
+      setMapping((prev) => {
+        const next = prev.slice()
+        next[index] = `custom.${id}`
+        return next
+      })
+      return
+    }
     setMapping((prev) => {
       const next = prev.slice()
-      next[index] = field === '' ? null : field
+      next[index] = value === '' ? null : (value as GuestFieldPath)
       return next
     })
   }
@@ -54,8 +76,9 @@ export default function ImportMappingDialog({
         </div>
 
         <p className="import-help">
-          Match each column from your file to a GuestList field. Columns set to &ldquo;Don&apos;t
-          import&rdquo; are skipped. {table.rows.length} row{table.rows.length === 1 ? '' : 's'} found.
+          Match each column from your file to a GuestList field, or create a new column for data
+          that doesn&apos;t fit an existing field. Columns set to &ldquo;Don&apos;t import&rdquo;
+          are skipped. {table.rows.length} row{table.rows.length === 1 ? '' : 's'} found.
         </p>
 
         <div className="import-mapping-table-wrapper">
@@ -65,15 +88,18 @@ export default function ImportMappingDialog({
                 {table.headers.map((h, i) => (
                   <th key={i}>
                     <div className="import-source-header">{h || `Column ${i + 1}`}</div>
-                    <select
-                      value={mapping[i] ?? ''}
-                      onChange={(e) => setColumnField(i, e.target.value as GuestFieldPath | '')}
-                    >
+                    <select value={mapping[i] ?? ''} onChange={(e) => setColumnField(i, e.target.value)}>
                       {FIELD_OPTIONS.map((opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
                       ))}
+                      {allCustomFields.map((def) => (
+                        <option key={def.id} value={`custom.${def.id}`}>
+                          {def.label}
+                        </option>
+                      ))}
+                      <option value={NEW_COLUMN_SENTINEL}>+ Create New Column</option>
                     </select>
                   </th>
                 ))}
@@ -95,7 +121,11 @@ export default function ImportMappingDialog({
           <button className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button className="btn btn-primary" disabled={mappedCount === 0} onClick={() => onConfirm(mapping)}>
+          <button
+            className="btn btn-primary"
+            disabled={mappedCount === 0}
+            onClick={() => onConfirm(mapping, newCustomFields)}
+          >
             Import {table.rows.length} Guest{table.rows.length === 1 ? '' : 's'}
           </button>
         </div>

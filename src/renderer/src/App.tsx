@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GuestListDocument } from '@shared/types'
-import { CURRENT_FORMAT_VERSION, emptyDocument } from '@shared/types'
+import type { CustomFieldDef, GuestFieldPath, GuestListDocument } from '@shared/types'
+import { buildGridColumns, CURRENT_FORMAT_VERSION, emptyDocument, getGuestField, migrateDocument } from '@shared/types'
 import type { ImportedTable } from '@shared/import'
 import { parseCsv, rowsToGuests } from '@shared/import'
 import { parseXlsx } from '@shared/importXlsx'
 import { toCsv } from '@shared/export'
+import { sanitizeFileName } from '@shared/filename'
+import { autoFitColumnWidth } from './lib/columnFit'
 import Grid from './components/Grid'
 import Toolbar from './components/Toolbar'
 import ExportDialog from './components/ExportDialog'
@@ -20,7 +22,7 @@ function parseDocumentFile(contents: string): GuestListDocument {
   if (parsed.formatVersion !== CURRENT_FORMAT_VERSION) {
     throw new Error('This file was created by a different version of GuestList.')
   }
-  return parsed as GuestListDocument
+  return migrateDocument(parsed as GuestListDocument)
 }
 
 function serializeDocument(doc: GuestListDocument): string {
@@ -53,7 +55,8 @@ export default function App(): JSX.Element {
         g.address.city,
         g.address.state,
         g.address.zip,
-        g.email
+        g.email,
+        ...Object.values(g.customFields)
       ]
         .join(' ')
         .toLowerCase()
@@ -74,6 +77,19 @@ export default function App(): JSX.Element {
       await window.guestlist.writeFile(path, serializeDocument(controller.doc))
       controller.markSaved()
       setSaveState('saved')
+    },
+    [controller]
+  )
+
+  const handleRenameTitle = useCallback(
+    async (newTitle: string) => {
+      const sanitized = sanitizeFileName(newTitle)
+      if (sanitized === controller.doc.title) return
+      controller.setTitle(sanitized)
+      const path = filePathRef.current
+      if (!path) return // never saved yet -- the new title just becomes the default Save filename
+      const result = await window.guestlist.renameFile(path, sanitized)
+      if (!result.canceled && result.path) setFilePath(result.path)
     },
     [controller]
   )
@@ -160,11 +176,28 @@ export default function App(): JSX.Element {
   }, [])
 
   const handleConfirmImport = useCallback(
-    (mapping: Parameters<typeof rowsToGuests>[1]) => {
+    (mapping: Parameters<typeof rowsToGuests>[1], newCustomFields: CustomFieldDef[]) => {
       if (!pendingImportTable) return
+      if (newCustomFields.length > 0) controller.addCustomFields(newCustomFields)
       const imported = rowsToGuests(pendingImportTable, mapping)
       controller.updateGuests((prev) => [...prev, ...imported])
       setPendingImportTable(null)
+
+      // Auto-fit every mapped column to the imported content so a wide,
+      // horizontally-laid-out spreadsheet doesn't get squeezed into narrow
+      // default columns and read as tall/vertical instead.
+      const touchedFields = new Set(mapping.filter((f): f is GuestFieldPath => f !== null))
+      if (touchedFields.size > 0) {
+        const allColumns = buildGridColumns([...controller.doc.customFieldDefs, ...newCustomFields])
+        for (const field of touchedFields) {
+          const columnDef = allColumns.find((c) => c.field === field)
+          if (!columnDef) continue
+          const values = imported.map((g) => getGuestField(g, field))
+          const fitted = autoFitColumnWidth(columnDef.label, values, document.body)
+          const current = controller.doc.columnWidths[columnDef.id] ?? columnDef.defaultWidth
+          if (fitted > current) controller.setColumnWidth(columnDef.id, fitted)
+        }
+      }
     },
     [pendingImportTable, controller]
   )
@@ -212,9 +245,11 @@ export default function App(): JSX.Element {
     <div className="app">
       <Toolbar
         title={controller.doc.title}
+        onRenameTitle={(t) => void handleRenameTitle(t)}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         saveState={saveState}
+        onSaveClick={() => void doSave(false)}
         onExport={() => setShowExportDialog(true)}
         onImport={() => void handleImportClick()}
         matchCount={matchCount}
@@ -223,6 +258,7 @@ export default function App(): JSX.Element {
       <Grid
         guests={controller.guests}
         columnWidths={controller.doc.columnWidths}
+        customFieldDefs={controller.doc.customFieldDefs}
         searchQuery={searchQuery}
         onUpdateGuests={controller.updateGuests}
         onColumnWidthChange={controller.setColumnWidth}
@@ -234,6 +270,7 @@ export default function App(): JSX.Element {
         <ExportDialog
           guests={controller.guests}
           presets={controller.doc.exportPresets}
+          customFieldDefs={controller.doc.customFieldDefs}
           onSavePresets={controller.setExportPresets}
           onExport={handleExport}
           onClose={() => setShowExportDialog(false)}
@@ -243,6 +280,7 @@ export default function App(): JSX.Element {
       {pendingImportTable && (
         <ImportMappingDialog
           table={pendingImportTable}
+          existingCustomFields={controller.doc.customFieldDefs}
           onConfirm={handleConfirmImport}
           onCancel={() => setPendingImportTable(null)}
         />

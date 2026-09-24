@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import {
   EXPORT_FILTER_LABELS,
-  EXPORT_SOURCE_LABELS,
   defaultAddressColumns,
   defaultEmailColumns,
+  exportSourceLabel,
+  type CustomFieldDef,
   type ExportColumnMapping,
   type ExportFilterKind,
   type ExportPreset,
@@ -15,6 +16,7 @@ import { buildExportRows, filterGuestsForExport } from '@shared/export'
 interface ExportDialogProps {
   guests: Guest[]
   presets: ExportPreset[]
+  customFieldDefs: CustomFieldDef[]
   onSavePresets: (presets: ExportPreset[]) => void
   onExport: (fileBaseName: string, header: string[], rows: string[][]) => void
   onClose: () => void
@@ -28,7 +30,7 @@ const FILTER_OPTIONS: ExportFilterKind[] = [
   'hasEmail'
 ]
 
-const SOURCE_OPTIONS: ExportSourceField[] = [
+const BUILT_IN_SOURCE_OPTIONS: ExportSourceField[] = [
   'title',
   'firstName',
   'lastName',
@@ -49,10 +51,15 @@ function newColumn(): ExportColumnMapping {
 export default function ExportDialog({
   guests,
   presets,
+  customFieldDefs,
   onSavePresets,
   onExport,
   onClose
 }: ExportDialogProps): JSX.Element {
+  const SOURCE_OPTIONS: ExportSourceField[] = [
+    ...BUILT_IN_SOURCE_OPTIONS,
+    ...customFieldDefs.map((d) => `custom.${d.id}` as ExportSourceField)
+  ]
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
   const [filter, setFilter] = useState<ExportFilterKind>('addressOnly')
   const [columns, setColumns] = useState<ExportColumnMapping[]>(defaultAddressColumns())
@@ -227,7 +234,7 @@ export default function ExportDialog({
                     >
                       {SOURCE_OPTIONS.map((s) => (
                         <option key={s} value={s}>
-                          {EXPORT_SOURCE_LABELS[s]}
+                          {exportSourceLabel(s, customFieldDefs)}
                         </option>
                       ))}
                     </select>

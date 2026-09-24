@@ -29,6 +29,7 @@ export const IPC = {
   writeFile: 'file:write',
   saveDialog: 'file:save-dialog',
   getRecentFiles: 'file:get-recent',
+  renameFile: 'file:rename',
 
   importDialog: 'import:dialog',
   readImportFile: 'import:read-file',

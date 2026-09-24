@@ -8,24 +8,37 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent
 } from 'react'
-import { DEFAULT_GRID_COLUMNS, getGuestField, setGuestField, type Guest } from '@shared/types'
+import {
+  buildGridColumns,
+  getGuestField,
+  setGuestField,
+  type CustomFieldDef,
+  type Guest
+} from '@shared/types'
 import type { GuestWarning } from '@shared/validation'
 import { computeGuestWarnings } from '@shared/validation'
 import { parseTsv, toTsv } from '../lib/clipboard'
 import {
+  applyMoveToGuests,
   applyPasteToGuests,
+  computeMoveDestinationTopLeft,
   normalizeSelection,
   padTo,
+  rangeHasDataOutside,
   totalRowCount,
+  type CellRect,
+  type CellRef,
   type SelectionRange
 } from '../lib/gridModel'
 import { estimateColumnsForTextarea, isCaretOnFirstVisualLine, isCaretOnLastVisualLine } from '../lib/textWrap'
-
-const MIN_COLUMN_WIDTH = 60
+import { autoFitColumnWidth, MIN_COLUMN_WIDTH } from '../lib/columnFit'
+import { buildValueFrequency, suggestCompletion } from '../lib/autocomplete'
+import ContextMenu, { type ContextMenuItem } from './ContextMenu'
 
 interface GridProps {
   guests: Guest[]
   columnWidths: Record<string, number>
+  customFieldDefs: CustomFieldDef[]
   searchQuery: string
   onUpdateGuests: (updater: (guests: Guest[]) => Guest[]) => void
   onColumnWidthChange: (columnId: string, width: number) => void
@@ -44,11 +57,18 @@ function matchesSearch(guest: Guest, query: string): boolean {
     guest.address.city,
     guest.address.state,
     guest.address.zip,
-    guest.email
+    guest.email,
+    ...Object.values(guest.customFields)
   ]
     .join(' ')
     .toLowerCase()
   return haystack.includes(query.trim().toLowerCase())
+}
+
+interface MoveDragState {
+  source: CellRect
+  grab: CellRef
+  hover: CellRef
 }
 
 /**
@@ -70,14 +90,15 @@ function matchesSearch(guest: Guest, query: string): boolean {
 export default function Grid({
   guests,
   columnWidths,
+  customFieldDefs,
   searchQuery,
   onUpdateGuests,
   onColumnWidthChange,
   onUndo,
   onRedo
 }: GridProps): JSX.Element {
+  const columns = useMemo(() => buildGridColumns(customFieldDefs), [customFieldDefs])
   const rowCount = totalRowCount(guests.length)
-  const columns = DEFAULT_GRID_COLUMNS
 
   const [selection, setSelection] = useState<SelectionRange>({
     anchor: { row: 0, col: 0 },
@@ -85,7 +106,11 @@ export default function Grid({
   })
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null)
   const [draftValue, setDraftValue] = useState('')
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null)
+
   const isMouseSelecting = useRef(false)
+  const dragModeRef = useRef<'select' | 'pending-move' | 'move'>('select')
   const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const editInputRef = useRef<HTMLTextAreaElement | null>(null)
   // Mirrors `editingCell` synchronously (state updates are async/batched).
@@ -97,6 +122,13 @@ export default function Grid({
   // stopEditing() checks this ref to make repeat calls within the same
   // transition a no-op.
   const isEditingRef = useRef(false)
+  // Kept current every render so the window-level mouseup handler (added
+  // once) always sees the latest data/columns without needing to
+  // re-subscribe on every guest edit.
+  const guestsRef = useRef(guests)
+  guestsRef.current = guests
+  const columnsRef = useRef(columns)
+  columnsRef.current = columns
 
   const warnings = useMemo(() => computeGuestWarnings(guests), [guests])
 
@@ -117,6 +149,14 @@ export default function Grid({
   useEffect(() => {
     if (!editingCell) focusWrapper()
   }, [editingCell])
+
+  const scrollCellIntoView = useCallback((row: number, col: number) => {
+    const el = gridWrapperRef.current?.querySelector(`[data-row="${row}"][data-col="${col}"]`)
+    // Guard for test environments (jsdom) that don't implement scrollIntoView.
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+  }, [])
 
   const getCellValue = useCallback(
     (row: number, col: number): string => {
@@ -175,11 +215,11 @@ export default function Grid({
   }, [draftValue, resizeEditInput])
 
   const stopEditing = useCallback(
-    (commit: boolean) => {
+    (commit: boolean, overrideValue?: string) => {
       if (!isEditingRef.current) return // already stopped this transition (see isEditingRef comment above)
       isEditingRef.current = false
       if (editingCell && commit) {
-        commitCellValue(editingCell.row, editingCell.col, draftValue)
+        commitCellValue(editingCell.row, editingCell.col, overrideValue !== undefined ? overrideValue : draftValue)
       }
       setEditingCell(null)
       setDraftValue('')
@@ -195,39 +235,104 @@ export default function Grid({
         anchor: extend ? prev.anchor : { row: clampedRow, col: clampedCol },
         focus: { row: clampedRow, col: clampedCol }
       }))
+      return { row: clampedRow, col: clampedCol }
     },
     [rowCount, columns.length]
   )
 
-  const commitAndMove = useCallback(
-    (row: number, col: number) => {
-      stopEditing(true)
-      moveSelection(row, col, false)
-      focusWrapper()
+  /** Keyboard-driven selection move: also keeps the target cell scrolled into view. */
+  const moveSelectionAndScroll = useCallback(
+    (row: number, col: number, extend: boolean) => {
+      const clamped = moveSelection(row, col, extend)
+      scrollCellIntoView(clamped.row, clamped.col)
     },
-    [stopEditing, moveSelection]
+    [moveSelection, scrollCellIntoView]
+  )
+
+  const commitAndMove = useCallback(
+    (row: number, col: number, overrideValue?: string) => {
+      stopEditing(true, overrideValue)
+      const clamped = moveSelection(row, col, false)
+      focusWrapper()
+      scrollCellIntoView(clamped.row, clamped.col)
+    },
+    [stopEditing, moveSelection, scrollCellIntoView]
   )
 
   const handleCellMouseDown = (row: number, col: number, shiftKey: boolean): void => {
     if (editingCell) stopEditing(true)
-    isMouseSelecting.current = true
-    moveSelection(row, col, shiftKey)
+    setContextMenu(null)
+    const current = normalizeSelection(selection)
+    const insideSelection =
+      !shiftKey && row >= current.rowStart && row <= current.rowEnd && col >= current.colStart && col <= current.colEnd
+    if (insideSelection) {
+      // Might become a drag-to-move; resolved on mouseup/mouseenter (see below).
+      dragModeRef.current = 'pending-move'
+    } else {
+      dragModeRef.current = 'select'
+      isMouseSelecting.current = true
+      moveSelection(row, col, shiftKey)
+    }
     focusWrapper()
   }
 
   const handleCellMouseEnter = (row: number, col: number): void => {
-    if (isMouseSelecting.current) {
-      moveSelection(row, col, true)
+    if (dragModeRef.current === 'select') {
+      if (isMouseSelecting.current) moveSelection(row, col, true)
+      return
+    }
+    if (dragModeRef.current === 'pending-move') {
+      const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
+      const grab = { row: selection.focus.row, col: selection.focus.col }
+      if (row !== grab.row || col !== grab.col) {
+        dragModeRef.current = 'move'
+        setMoveDrag({ source: { rowStart, rowEnd, colStart, colEnd }, grab, hover: { row, col } })
+      }
+      return
+    }
+    if (dragModeRef.current === 'move') {
+      setMoveDrag((prev) => (prev ? { ...prev, hover: { row, col } } : prev))
     }
   }
 
   useEffect(() => {
     const onMouseUp = (): void => {
       isMouseSelecting.current = false
+      if (dragModeRef.current === 'move' && moveDrag) {
+        const cols = columnsRef.current
+        const currentGuests = guestsRef.current
+        const dest = computeMoveDestinationTopLeft(moveDrag.source, moveDrag.grab, moveDrag.hover, cols.length)
+        const height = moveDrag.source.rowEnd - moveDrag.source.rowStart
+        const width = moveDrag.source.colEnd - moveDrag.source.colStart
+        const destRect: CellRect = {
+          rowStart: dest.row,
+          rowEnd: dest.row + height,
+          colStart: dest.col,
+          colEnd: Math.min(cols.length - 1, dest.col + width)
+        }
+        const wouldOverwrite = rangeHasDataOutside(currentGuests, destRect, moveDrag.source, cols)
+        const proceed =
+          !wouldOverwrite ||
+          window.confirm('This will overwrite existing data in the destination cells. Move anyway?')
+        if (proceed) {
+          const result = applyMoveToGuests(currentGuests, moveDrag.source, dest, cols)
+          onUpdateGuests(() => result.guests)
+          setSelection({
+            anchor: { row: result.dest.rowStart, col: result.dest.colStart },
+            focus: { row: result.dest.rowEnd, col: result.dest.colEnd }
+          })
+        }
+      } else if (dragModeRef.current === 'pending-move') {
+        // A plain click (no drag) on an already-selected cell: collapse to it, like a normal click.
+        moveSelection(selection.focus.row, selection.focus.col, false)
+      }
+      dragModeRef.current = 'select'
+      setMoveDrag(null)
     }
     window.addEventListener('mouseup', onMouseUp)
     return () => window.removeEventListener('mouseup', onMouseUp)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moveDrag, onUpdateGuests, selection.focus.row, selection.focus.col])
 
   const handleCellDoubleClick = (row: number, col: number): void => {
     // Defensive: a real mouse double-click's preceding mousedown already
@@ -266,21 +371,32 @@ export default function Grid({
     return toTsv(grid)
   }, [selection, getCellValue])
 
+  /** Auto-fit each touched column's width to its (post-write) content. Keeps horizontally-pasted/imported data from looking artificially tall in narrow default columns. */
+  const autoFitColumns = useCallback(
+    (nextGuests: Guest[], colStart: number, colEnd: number) => {
+      const referenceEl = gridWrapperRef.current
+      if (!referenceEl) return
+      for (let c = colStart; c <= colEnd && c < columns.length; c++) {
+        const def = columns[c]
+        const values = nextGuests.map((g) => getGuestField(g, def.field))
+        const fitted = autoFitColumnWidth(def.label, values, referenceEl)
+        const current = columnWidths[def.id] ?? def.defaultWidth
+        if (fitted > current) onColumnWidthChange(def.id, fitted)
+      }
+    },
+    [columns, columnWidths, onColumnWidthChange]
+  )
+
   const pasteAt = useCallback(
     (row: number, col: number, text: string) => {
       const block = parseTsv(text)
       if (block.length === 0) return
-      let lastRow = row
-      let lastCol = col
-      onUpdateGuests((prev) => {
-        const result = applyPasteToGuests(prev, row, col, block, columns)
-        lastRow = result.lastRow
-        lastCol = result.lastCol
-        return result.guests
-      })
-      setSelection({ anchor: { row, col }, focus: { row: lastRow, col: lastCol } })
+      const result = applyPasteToGuests(guests, row, col, block, columns)
+      onUpdateGuests(() => result.guests)
+      setSelection({ anchor: { row, col }, focus: { row: result.lastRow, col: result.lastCol } })
+      autoFitColumns(result.guests, col, result.lastCol)
     },
-    [onUpdateGuests, columns]
+    [guests, columns, onUpdateGuests, autoFitColumns]
   )
 
   // --- Selection-mode keyboard handling (grid wrapper has focus) ----------
@@ -303,29 +419,29 @@ export default function Grid({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        moveSelection(row + 1, col, shift)
+        moveSelectionAndScroll(row + 1, col, shift)
         return
       case 'ArrowUp':
         e.preventDefault()
-        moveSelection(row - 1, col, shift)
+        moveSelectionAndScroll(row - 1, col, shift)
         return
       case 'ArrowLeft':
         e.preventDefault()
-        moveSelection(row, col - 1, shift)
+        moveSelectionAndScroll(row, col - 1, shift)
         return
       case 'ArrowRight':
         e.preventDefault()
-        moveSelection(row, col + 1, shift)
+        moveSelectionAndScroll(row, col + 1, shift)
         return
       case 'Tab':
         e.preventDefault()
-        moveSelection(row, col + (e.shiftKey ? -1 : 1), false)
+        moveSelectionAndScroll(row, col + (e.shiftKey ? -1 : 1), false)
         return
       case 'Enter':
         // Not editing: Enter moves down, matching normal spreadsheet feel
         // (F2 / double-click / typing are what open the editor).
         e.preventDefault()
-        moveSelection(row + 1, col, false)
+        moveSelectionAndScroll(row + 1, col, false)
         return
       case 'F2':
         e.preventDefault()
@@ -364,6 +480,50 @@ export default function Grid({
     clearSelection()
   }
 
+  // --- Context menu (right-click) ------------------------------------------
+  const handleCellContextMenu = (row: number, col: number, e: ReactMouseEvent): void => {
+    e.preventDefault()
+    if (editingCell) stopEditing(true)
+    const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
+    const inside = row >= rowStart && row <= rowEnd && col >= colStart && col <= colEnd
+    if (!inside) moveSelection(row, col, false)
+    focusWrapper()
+    setContextMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  const pasteFromClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text) pasteAt(selection.focus.row, selection.focus.col, text)
+    } catch {
+      // Clipboard permission denied or unavailable -- silently no-op rather than crash the menu.
+    }
+  }, [pasteAt, selection.focus])
+
+  const contextMenuItems: ContextMenuItem[] = [
+    {
+      label: 'Cut',
+      onSelect: () => {
+        void navigator.clipboard.writeText(copySelection())
+        clearSelection()
+      }
+    },
+    { label: 'Copy', onSelect: () => void navigator.clipboard.writeText(copySelection()) },
+    { label: 'Paste', onSelect: () => void pasteFromClipboard() },
+    { label: 'Delete', onSelect: clearSelection }
+  ]
+
+  // --- Ghost autocomplete (while editing) ----------------------------------
+  const suggestionFreq = useMemo(() => {
+    if (!editingCell) return null
+    return buildValueFrequency(guests, columns[editingCell.col].field)
+  }, [editingCell, guests, columns])
+
+  const suggestion = useMemo(() => {
+    if (!suggestionFreq) return null
+    return suggestCompletion(draftValue, suggestionFreq)
+  }, [suggestionFreq, draftValue])
+
   // --- Editing-mode keyboard handling (cell's own textarea has focus) -----
   const handleEditKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
     // The editor textarea is nested inside the grid wrapper, which has its
@@ -375,6 +535,7 @@ export default function Grid({
     e.stopPropagation()
     const el = e.currentTarget
     const { row, col } = selection.focus
+    const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -383,6 +544,10 @@ export default function Grid({
     }
     if (e.key === 'Tab') {
       e.preventDefault()
+      if (suggestion && atEnd) {
+        commitAndMove(row, col + (e.shiftKey ? -1 : 1), draftValue + suggestion)
+        return
+      }
       commitAndMove(row, col + (e.shiftKey ? -1 : 1))
       return
     }
@@ -393,18 +558,24 @@ export default function Grid({
       return
     }
 
+    if (e.key === 'ArrowRight') {
+      if (suggestion && atEnd) {
+        e.preventDefault()
+        const accepted = draftValue + suggestion
+        setDraftValue(accepted)
+        requestAnimationFrame(() => el.setSelectionRange(accepted.length, accepted.length))
+        return
+      }
+      if (atEnd) {
+        e.preventDefault()
+        commitAndMove(row, col + 1)
+      }
+      return
+    }
     if (e.key === 'ArrowLeft') {
       if (el.selectionStart === 0 && el.selectionEnd === 0) {
         e.preventDefault()
         commitAndMove(row, col - 1)
-      }
-      return
-    }
-    if (e.key === 'ArrowRight') {
-      const len = el.value.length
-      if (el.selectionStart === len && el.selectionEnd === len) {
-        e.preventDefault()
-        commitAndMove(row, col + 1)
       }
       return
     }
@@ -454,11 +625,34 @@ export default function Grid({
     window.removeEventListener('mouseup', handleResizeEnd)
   }
 
+  const handleResizeDoubleClick = (columnId: string, e: ReactMouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    const def = columns.find((c) => c.id === columnId)
+    const referenceEl = gridWrapperRef.current
+    if (!def || !referenceEl) return
+    const values = guests.map((g) => getGuestField(g, def.field))
+    onColumnWidthChange(columnId, autoFitColumnWidth(def.label, values, referenceEl))
+  }
+
   const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
+  const moveDestRect: CellRect | null = moveDrag
+    ? (() => {
+        const dest = computeMoveDestinationTopLeft(moveDrag.source, moveDrag.grab, moveDrag.hover, columns.length)
+        const height = moveDrag.source.rowEnd - moveDrag.source.rowStart
+        const width = moveDrag.source.colEnd - moveDrag.source.colStart
+        return {
+          rowStart: dest.row,
+          rowEnd: dest.row + height,
+          colStart: dest.col,
+          colEnd: Math.min(columns.length - 1, dest.col + width)
+        }
+      })()
+    : null
 
   return (
     <div
-      className="grid-wrapper"
+      className={`grid-wrapper${moveDrag ? ' is-moving' : ''}`}
       data-testid="grid-wrapper"
       ref={gridWrapperRef}
       tabIndex={0}
@@ -483,6 +677,8 @@ export default function Grid({
                 <div
                   className="col-resize-handle"
                   onMouseDown={(e) => handleResizeStart(c.id, e)}
+                  onDoubleClick={(e) => handleResizeDoubleClick(c.id, e)}
+                  title="Drag to resize, double-click to fit content"
                 />
               </th>
             ))}
@@ -504,6 +700,18 @@ export default function Grid({
                   const isSelected =
                     row >= rowStart && row <= rowEnd && col >= colStart && col <= colEnd
                   const isPrimary = selection.focus.row === row && selection.focus.col === col
+                  const isMoveSource =
+                    moveDrag &&
+                    row >= moveDrag.source.rowStart &&
+                    row <= moveDrag.source.rowEnd &&
+                    col >= moveDrag.source.colStart &&
+                    col <= moveDrag.source.colEnd
+                  const isMoveTarget =
+                    moveDestRect &&
+                    row >= moveDestRect.rowStart &&
+                    row <= moveDestRect.rowEnd &&
+                    col >= moveDestRect.colStart &&
+                    col <= moveDestRect.colEnd
                   const value = getCellValue(row, col)
                   const cellWarnings = rowWarnings.filter((w) => {
                     if (w.kind === 'malformed-email') return c.field === 'email'
@@ -521,25 +729,36 @@ export default function Grid({
                         'grid-cell',
                         isSelected ? 'cell-selected' : '',
                         isPrimary ? 'cell-primary' : '',
-                        cellWarnings.length > 0 ? 'cell-warning' : ''
+                        cellWarnings.length > 0 ? 'cell-warning' : '',
+                        isMoveSource ? 'cell-move-source' : '',
+                        isMoveTarget ? 'cell-move-target' : ''
                       ]
                         .filter(Boolean)
                         .join(' ')}
                       onMouseDown={(e) => handleCellMouseDown(row, col, e.shiftKey)}
                       onMouseEnter={() => handleCellMouseEnter(row, col)}
                       onDoubleClick={() => handleCellDoubleClick(row, col)}
+                      onContextMenu={(e) => handleCellContextMenu(row, col, e)}
                       title={cellWarnings.map((w) => w.message).join('\n') || undefined}
                     >
                       {isEditing ? (
-                        <textarea
-                          ref={editInputRef}
-                          className="cell-editor"
-                          value={draftValue}
-                          onChange={(e) => setDraftValue(e.target.value)}
-                          onKeyDown={handleEditKeyDown}
-                          onBlur={() => stopEditing(true)}
-                          rows={1}
-                        />
+                        <div className="cell-editor-container">
+                          <textarea
+                            ref={editInputRef}
+                            className="cell-editor"
+                            value={draftValue}
+                            onChange={(e) => setDraftValue(e.target.value)}
+                            onKeyDown={handleEditKeyDown}
+                            onBlur={() => stopEditing(true)}
+                            rows={1}
+                          />
+                          {suggestion && (
+                            <div className="cell-ghost-overlay" aria-hidden>
+                              <span className="cell-ghost-typed">{draftValue}</span>
+                              <span className="cell-ghost-suggestion">{suggestion}</span>
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <div className="cell-display">{value}</div>
                       )}
@@ -551,6 +770,10 @@ export default function Grid({
           })}
         </tbody>
       </table>
+
+      {contextMenu && (
+        <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenuItems} onClose={() => setContextMenu(null)} />
+      )}
     </div>
   )
 }

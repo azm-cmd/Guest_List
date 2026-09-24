@@ -1,9 +1,10 @@
 import { app, shell, BrowserWindow, Menu, dialog, ipcMain, type MenuItemConstructorOptions } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { readFile } from 'fs/promises'
 import { is } from './electronIs'
 import { IPC } from '../shared/ipc'
-import { readTextFile, writeTextFile, getRecentFiles, addRecentFile } from './fileStore'
+import { sanitizeFileName } from '../shared/filename'
+import { readTextFile, writeTextFile, renameFile, getRecentFiles, addRecentFile } from './fileStore'
 
 let mainWindow: BrowserWindow | null = null
 let isDirty = false
@@ -168,6 +169,15 @@ ipcMain.handle(IPC.writeFile, async (_event, path: string, contents: string) => 
 })
 
 ipcMain.handle(IPC.getRecentFiles, async () => getRecentFiles())
+
+ipcMain.handle(IPC.renameFile, async (_event, oldPath: string, newBaseName: string) => {
+  const newPath = join(dirname(oldPath), `${sanitizeFileName(newBaseName)}.guestlist`)
+  if (newPath === oldPath) return { canceled: false, path: oldPath }
+  await renameFile(oldPath, newPath)
+  await addRecentFile(newPath)
+  await buildMenu()
+  return { canceled: false, path: newPath }
+})
 
 ipcMain.handle(IPC.importDialog, async () => {
   if (!mainWindow) return { canceled: true }

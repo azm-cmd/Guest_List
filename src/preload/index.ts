@@ -58,6 +58,8 @@ const api = {
   writeFile: (path: string, contents: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.writeFile, path, contents),
   getRecentFiles: (): Promise<string[]> => ipcRenderer.invoke(IPC.getRecentFiles),
+  renameFile: (oldPath: string, newBaseName: string): Promise<SaveDialogResult> =>
+    ipcRenderer.invoke(IPC.renameFile, oldPath, newBaseName),
 
   importDialog: (): Promise<ImportDialogResult> => ipcRenderer.invoke(IPC.importDialog),
 

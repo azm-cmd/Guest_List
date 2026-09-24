@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import Grid from './Grid'
-import { emptyGuest, setGuestField, type Guest } from '@shared/types'
+import { emptyGuest, setGuestField, type CustomFieldDef, type Guest } from '@shared/types'
 
 function guestWith(fields: Record<string, string>): Guest {
   let g = emptyGuest(crypto.randomUUID())
@@ -12,13 +12,20 @@ function guestWith(fields: Record<string, string>): Guest {
   return g
 }
 
-function Harness({ initialGuests = [] }: { initialGuests?: Guest[] }): JSX.Element {
+function Harness({
+  initialGuests = [],
+  customFieldDefs = []
+}: {
+  initialGuests?: Guest[]
+  customFieldDefs?: CustomFieldDef[]
+}): JSX.Element {
   const [guests, setGuests] = useState<Guest[]>(initialGuests)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   return (
     <Grid
       guests={guests}
       columnWidths={columnWidths}
+      customFieldDefs={customFieldDefs}
       searchQuery=""
       onUpdateGuests={(updater) => setGuests((prev) => updater(prev))}
       onColumnWidthChange={(id, w) => setColumnWidths((prev) => ({ ...prev, [id]: w }))}

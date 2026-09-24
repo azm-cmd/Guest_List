@@ -17,6 +17,12 @@ export async function writeTextFile(path: string, contents: string): Promise<voi
   await rename(tmpPath, path)
 }
 
+/** Rename/move a file, creating the destination directory if needed. */
+export async function renameFile(oldPath: string, newPath: string): Promise<void> {
+  await mkdir(dirname(newPath), { recursive: true })
+  await rename(oldPath, newPath)
+}
+
 export async function getRecentFiles(): Promise<string[]> {
   try {
     const raw = await readFile(RECENT_FILES_PATH(), 'utf-8')

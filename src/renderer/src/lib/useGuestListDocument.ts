@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import type { ExportPreset, Guest, GuestListDocument } from '@shared/types'
+import type { CustomFieldDef, ExportPreset, Guest, GuestListDocument } from '@shared/types'
 import { emptyDocument } from '@shared/types'
 import { trimTrailingBlank } from './gridModel'
 
@@ -16,6 +16,7 @@ export interface GuestListController {
   setTitle: (title: string) => void
   setExportPresets: (presets: ExportPreset[]) => void
   setColumnWidth: (columnId: string, width: number) => void
+  addCustomFields: (defs: CustomFieldDef[]) => void
   undo: () => void
   redo: () => void
   markSaved: () => void
@@ -65,6 +66,17 @@ export function useGuestListDocument(initial: GuestListDocument): GuestListContr
     setIsDirty(true)
   }, [])
 
+  const addCustomFields = useCallback((defs: CustomFieldDef[]) => {
+    if (defs.length === 0) return
+    setDoc((prev) => {
+      const existingIds = new Set(prev.customFieldDefs.map((d) => d.id))
+      const toAdd = defs.filter((d) => !existingIds.has(d.id))
+      if (toAdd.length === 0) return prev
+      return { ...prev, customFieldDefs: [...prev.customFieldDefs, ...toAdd], updatedAt: new Date().toISOString() }
+    })
+    setIsDirty(true)
+  }, [])
+
   const undo = useCallback(() => {
     setDoc((prev) => {
       const previousGuests = undoStack.current.pop()
@@ -98,6 +110,7 @@ export function useGuestListDocument(initial: GuestListDocument): GuestListContr
     setTitle,
     setExportPresets,
     setColumnWidth,
+    addCustomFields,
     undo,
     redo,
     markSaved

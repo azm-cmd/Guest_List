@@ -82,6 +82,39 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 260px;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.doc-title:hover {
+  background: var(--color-bg-subtle);
+}
+
+.doc-title-edit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.doc-title-input {
+  font-weight: 600;
+  font-size: 14px;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  padding: 1px 4px;
+  max-width: 220px;
+}
+
+.doc-title-ext {
+  font-size: 14px;
+  color: var(--color-text-secondary);
 }
 
 .save-status {
@@ -91,6 +124,17 @@ textarea {
   border-radius: 10px;
   background: var(--color-bg-subtle);
   white-space: nowrap;
+  border: none;
+  font-family: inherit;
+  cursor: default;
+}
+
+.save-status:not(:disabled) {
+  cursor: pointer;
+}
+
+.save-status:not(:disabled):hover {
+  background: var(--color-border);
 }
 
 .save-status-saving {
@@ -100,6 +144,10 @@ textarea {
 .save-status-unsaved {
   color: var(--color-warning);
   background: var(--color-warning-bg);
+}
+
+.save-status-unsaved:not(:disabled):hover {
+  background: #ffedbf;
 }
 
 .toolbar-center {
@@ -261,7 +309,13 @@ thead tr .row-header-cell {
   line-height: 1.4;
 }
 
+.cell-editor-container {
+  position: relative;
+}
+
 .cell-editor {
+  position: relative;
+  z-index: 2;
   width: 100%;
   min-height: var(--row-height-min);
   border: none;
@@ -269,10 +323,34 @@ thead tr .row-header-cell {
   padding: 7px 10px;
   resize: none;
   line-height: 1.4;
-  background: var(--color-bg);
+  background: transparent;
   overflow: hidden;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Ghost autocomplete: an overlay sitting BEHIND the (transparent-background)
+   textarea. Its invisible spacer text is hidden behind the textarea's own
+   real (opaque) typed characters; the gray suggestion shows through in the
+   blank space right after them. Never touches the actual editable value. */
+.cell-ghost-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 7px 10px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+}
+
+.cell-ghost-typed {
+  visibility: hidden;
+}
+
+.cell-ghost-suggestion {
+  color: var(--color-text-secondary);
+  opacity: 0.7;
 }
 
 .cell-selected {
@@ -294,6 +372,52 @@ thead tr .row-header-cell {
 
 .row-highlighted .cell-display {
   background: var(--color-search-highlight);
+}
+
+/* Move (drag-and-drop) -------------------------------------------------- */
+
+.grid-wrapper.is-moving .grid-cell {
+  cursor: grabbing;
+}
+
+.cell-move-source {
+  opacity: 0.5;
+}
+
+.cell-move-target {
+  background: var(--color-selection);
+  outline: 2px dashed var(--color-selection-border);
+  outline-offset: -2px;
+}
+
+/* Context menu ----------------------------------------------------------- */
+
+.context-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 160px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+}
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.context-menu-item:hover {
+  background: var(--color-bg-subtle);
 }
 
 /* ---------------------------------------------------------------------- */
