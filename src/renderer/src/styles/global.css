@@ -1,0 +1,566 @@
+:root {
+  --color-bg: #ffffff;
+  --color-bg-subtle: #fafafa;
+  --color-text: #1c1c1e;
+  --color-text-secondary: #6b6b70;
+  --color-border: #e2e2e5;
+  --color-border-strong: #c9c9ce;
+  --color-accent: #2f5fda;
+  --color-accent-hover: #274ec0;
+  --color-selection: rgba(47, 95, 218, 0.12);
+  --color-selection-border: #2f5fda;
+  --color-warning: #b8860b;
+  --color-warning-bg: #fff8e6;
+  --color-danger: #c0392b;
+  --color-search-highlight: #fff3b0;
+
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-size-base: 13.5px;
+  --row-height-min: 34px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Toolbar                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  flex-shrink: 0;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 200px;
+}
+
+.doc-title {
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.save-status {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+  white-space: nowrap;
+}
+
+.save-status-saving {
+  color: var(--color-accent);
+}
+
+.save-status-unsaved {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.toolbar-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+}
+
+.search-input {
+  width: 320px;
+  max-width: 60%;
+  padding: 7px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-bg-subtle);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  background: var(--color-bg);
+}
+
+.search-count {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.toolbar-right {
+  display: flex;
+  gap: 8px;
+  min-width: 200px;
+  justify-content: flex-end;
+}
+
+.btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.btn:hover {
+  background: var(--color-bg-subtle);
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn-secondary {
+  background: var(--color-bg);
+}
+
+.btn-small {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Grid                                                                    */
+/* ---------------------------------------------------------------------- */
+
+.grid-wrapper {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  background: var(--color-bg);
+}
+
+.grid-focus-sink {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  border: none;
+  resize: none;
+  pointer-events: none;
+}
+
+.grid-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.row-header-col {
+  width: 44px;
+}
+
+.row-header-cell {
+  width: 44px;
+  min-width: 44px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+  user-select: none;
+  vertical-align: top;
+  padding-top: 8px;
+}
+
+.col-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+}
+
+.col-resize-handle {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 3;
+}
+
+thead tr .row-header-cell {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 3;
+}
+
+.grid-cell {
+  border: 1px solid var(--color-border);
+  padding: 0;
+  vertical-align: top;
+  min-height: var(--row-height-min);
+  cursor: cell;
+}
+
+.cell-display {
+  padding: 7px 10px;
+  min-height: var(--row-height-min);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.cell-editor {
+  width: 100%;
+  min-height: var(--row-height-min);
+  border: none;
+  outline: none;
+  padding: 7px 10px;
+  resize: none;
+  line-height: 1.4;
+  background: var(--color-bg);
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cell-selected {
+  background: var(--color-selection);
+}
+
+.cell-primary {
+  outline: 2px solid var(--color-selection-border);
+  outline-offset: -2px;
+}
+
+.cell-warning {
+  box-shadow: inset 0 -2px 0 0 var(--color-warning);
+}
+
+.row-dimmed {
+  opacity: 0.35;
+}
+
+.row-highlighted .cell-display {
+  background: var(--color-search-highlight);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Modals                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 22, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--color-bg);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  padding: 20px 24px 24px;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.export-dialog {
+  width: 640px;
+}
+
+.import-dialog {
+  width: 720px;
+}
+
+.error-dialog {
+  width: 380px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.modal-close {
+  border: none;
+  background: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  line-height: 1;
+  padding: 4px;
+}
+
+.modal-close:hover {
+  color: var(--color-text);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.export-section {
+  margin-bottom: 16px;
+}
+
+.field-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+.export-section select,
+.export-section input[type='text'] {
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-bg);
+}
+
+.export-match-count {
+  margin-left: 10px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+
+.export-quickstart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.preset-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: 12px;
+}
+
+.preset-list-label {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+
+.preset-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.preset-chip-btn {
+  border: none;
+  background: var(--color-bg-subtle);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.preset-chip-btn:hover {
+  background: var(--color-selection);
+}
+
+.preset-chip-delete {
+  border: none;
+  border-left: 1px solid var(--color-border-strong);
+  background: var(--color-bg-subtle);
+  padding: 5px 8px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+.preset-chip-delete:hover {
+  color: var(--color-danger);
+}
+
+.export-columns-table,
+.import-mapping-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.export-columns-table th,
+.export-columns-table td {
+  border: 1px solid var(--color-border);
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.export-columns-table input,
+.export-columns-table select {
+  width: 100%;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  padding: 5px 6px;
+}
+
+.export-col-actions {
+  white-space: nowrap;
+  text-align: center;
+}
+
+.export-col-actions button {
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg);
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  margin: 0 2px;
+}
+
+.export-col-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.export-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.export-file-row input {
+  flex: 1;
+}
+
+.export-format-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.export-preset-save {
+  display: flex;
+  gap: 8px;
+}
+
+.export-preset-save input {
+  flex: 1;
+}
+
+.import-help {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 0 0 14px;
+}
+
+.import-mapping-table-wrapper {
+  overflow-x: auto;
+}
+
+.import-mapping-table th {
+  background: var(--color-bg-subtle);
+  vertical-align: top;
+  min-width: 150px;
+}
+
+.import-source-header {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.import-mapping-table select {
+  width: 100%;
+}
+
+.import-mapping-table td {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.error-dialog p {
+  margin: 0 0 4px;
+  font-size: 14px;
+}

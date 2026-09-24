@@ -1,0 +1,30 @@
+appId: com.guestlist.app
+productName: GuestList
+directories:
+  buildResources: build
+files:
+  - out/**/*
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+fileAssociations:
+  - ext: guestlist
+    name: GuestList Document
+    role: Editor
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.productivity
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Office
