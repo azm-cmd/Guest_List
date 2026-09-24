@@ -182,16 +182,11 @@ textarea {
   background: var(--color-bg);
 }
 
-.grid-focus-sink {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  border: none;
-  resize: none;
-  pointer-events: none;
+/* The wrapper itself is the focus target in selection mode (see Grid.tsx),
+   but the per-cell .cell-primary/.cell-selected styling is the visual
+   indicator -- suppress the browser's default focus ring on the wrapper. */
+.grid-wrapper:focus {
+  outline: none;
 }
 
 .grid-table {

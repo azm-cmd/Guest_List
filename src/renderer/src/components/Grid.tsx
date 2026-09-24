@@ -19,6 +19,7 @@ import {
   totalRowCount,
   type SelectionRange
 } from '../lib/gridModel'
+import { estimateColumnsForTextarea, isCaretOnFirstVisualLine, isCaretOnLastVisualLine } from '../lib/textWrap'
 
 const MIN_COLUMN_WIDTH = 60
 
@@ -50,6 +51,22 @@ function matchesSearch(guest: Guest, query: string): boolean {
   return haystack.includes(query.trim().toLowerCase())
 }
 
+/**
+ * Selection/editing architecture:
+ *
+ * - The grid wrapper (`gridWrapperRef`) is a plain, focusable `<div>` that
+ *   owns "selection mode": whenever no cell is being edited, it holds real
+ *   DOM focus and is the single target for navigation keys, Delete/Backspace,
+ *   typing-to-start-edit, and native copy/cut/paste. Because it's a plain
+ *   div (not a form control), it never fights the browser's readonly/
+ *   disabled paste-suppression rules the way an `<input readOnly>` sink did.
+ * - Editing is a separate, explicit state (`editingCell`). Only the single
+ *   cell being edited ever mounts a `<textarea>`, and only that textarea
+ *   ever receives focus while editing. Selection and editing therefore
+ *   never contend for focus: exactly one of {wrapper, editor textarea}
+ *   is focused at any time, and each transition (click, type, F2,
+ *   double-click, commit, cancel) explicitly moves focus to the other.
+ */
 export default function Grid({
   guests,
   columnWidths,
@@ -69,9 +86,17 @@ export default function Grid({
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null)
   const [draftValue, setDraftValue] = useState('')
   const isMouseSelecting = useRef(false)
-  const focusSinkRef = useRef<HTMLTextAreaElement | null>(null)
+  const gridWrapperRef = useRef<HTMLDivElement | null>(null)
   const editInputRef = useRef<HTMLTextAreaElement | null>(null)
-  const tableWrapperRef = useRef<HTMLDivElement | null>(null)
+  // Mirrors `editingCell` synchronously (state updates are async/batched).
+  // Programmatically moving focus away from the editor (e.g. in Escape/
+  // Enter/Tab handlers, via `focusWrapper()`) fires a real DOM 'blur' on
+  // the still-mounted textarea *before* React re-renders, which would
+  // otherwise re-invoke the editor's onBlur-commit handler a second time
+  // and stomp on an explicit cancel (Escape) or double-apply a commit.
+  // stopEditing() checks this ref to make repeat calls within the same
+  // transition a no-op.
+  const isEditingRef = useRef(false)
 
   const warnings = useMemo(() => computeGuestWarnings(guests), [guests])
 
@@ -85,12 +110,12 @@ export default function Grid({
     return set
   }, [guests, searchQuery, activeSearch])
 
-  const focusSink = (): void => {
-    focusSinkRef.current?.focus({ preventScroll: true })
+  const focusWrapper = (): void => {
+    gridWrapperRef.current?.focus({ preventScroll: true })
   }
 
   useEffect(() => {
-    if (!editingCell) focusSink()
+    if (!editingCell) focusWrapper()
   }, [editingCell])
 
   const getCellValue = useCallback(
@@ -120,13 +145,25 @@ export default function Grid({
     el.style.height = `${el.scrollHeight}px`
   }, [])
 
+  /**
+   * Begin editing a cell.
+   * - `initialValue` set (typing-to-edit): the draft REPLACES the old value
+   *   entirely, caret lands at the end (normal spreadsheet "start fresh"
+   *   behavior -- no need to delete the old value first).
+   * - `initialValue` omitted (F2 / double-click): the existing value is
+   *   preserved for normal editing, caret placed at the end.
+   */
   const startEditing = useCallback(
     (row: number, col: number, initialValue?: string) => {
+      isEditingRef.current = true
       setEditingCell({ row, col })
       setDraftValue(initialValue !== undefined ? initialValue : getCellValue(row, col))
       requestAnimationFrame(() => {
-        editInputRef.current?.focus()
-        editInputRef.current?.select()
+        const el = editInputRef.current
+        if (!el) return
+        el.focus()
+        const pos = el.value.length
+        el.setSelectionRange(pos, pos)
         resizeEditInput()
       })
     },
@@ -139,6 +176,8 @@ export default function Grid({
 
   const stopEditing = useCallback(
     (commit: boolean) => {
+      if (!isEditingRef.current) return // already stopped this transition (see isEditingRef comment above)
+      isEditingRef.current = false
       if (editingCell && commit) {
         commitCellValue(editingCell.row, editingCell.col, draftValue)
       }
@@ -160,11 +199,20 @@ export default function Grid({
     [rowCount, columns.length]
   )
 
+  const commitAndMove = useCallback(
+    (row: number, col: number) => {
+      stopEditing(true)
+      moveSelection(row, col, false)
+      focusWrapper()
+    },
+    [stopEditing, moveSelection]
+  )
+
   const handleCellMouseDown = (row: number, col: number, shiftKey: boolean): void => {
     if (editingCell) stopEditing(true)
     isMouseSelecting.current = true
     moveSelection(row, col, shiftKey)
-    focusSink()
+    focusWrapper()
   }
 
   const handleCellMouseEnter = (row: number, col: number): void => {
@@ -182,6 +230,11 @@ export default function Grid({
   }, [])
 
   const handleCellDoubleClick = (row: number, col: number): void => {
+    // Defensive: a real mouse double-click's preceding mousedown already
+    // selects (row, col) via handleCellMouseDown, but don't rely on that --
+    // explicitly sync selection here too so editingCell and selection.focus
+    // can never point at different cells.
+    moveSelection(row, col, false)
     startEditing(row, col)
   }
 
@@ -230,7 +283,8 @@ export default function Grid({
     [onUpdateGuests, columns]
   )
 
-  const handleGridKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
+  // --- Selection-mode keyboard handling (grid wrapper has focus) ----------
+  const handleGridKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     const { row, col } = selection.focus
     const shift = e.shiftKey
 
@@ -268,6 +322,12 @@ export default function Grid({
         moveSelection(row, col + (e.shiftKey ? -1 : 1), false)
         return
       case 'Enter':
+        // Not editing: Enter moves down, matching normal spreadsheet feel
+        // (F2 / double-click / typing are what open the editor).
+        e.preventDefault()
+        moveSelection(row + 1, col, false)
+        return
+      case 'F2':
         e.preventDefault()
         startEditing(row, col)
         return
@@ -286,45 +346,84 @@ export default function Grid({
     }
   }
 
-  const handleEditKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      stopEditing(true)
-      moveSelection(selection.focus.row + 1, selection.focus.col, false)
-      focusSink()
-      return
-    }
-    if (e.key === 'Tab') {
-      e.preventDefault()
-      stopEditing(true)
-      moveSelection(selection.focus.row, selection.focus.col + (e.shiftKey ? -1 : 1), false)
-      focusSink()
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      stopEditing(false)
-      focusSink()
-      return
-    }
+  const handleGridPaste = (e: ReactClipboardEvent<HTMLDivElement>): void => {
+    e.preventDefault()
+    const text = e.clipboardData.getData('text/plain')
+    if (!text) return
+    pasteAt(selection.focus.row, selection.focus.col, text)
   }
 
-  const handleCopy = (e: ReactClipboardEvent): void => {
+  const handleGridCopy = (e: ReactClipboardEvent<HTMLDivElement>): void => {
     e.preventDefault()
     e.clipboardData.setData('text/plain', copySelection())
   }
 
-  const handleCut = (e: ReactClipboardEvent): void => {
+  const handleGridCut = (e: ReactClipboardEvent<HTMLDivElement>): void => {
     e.preventDefault()
     e.clipboardData.setData('text/plain', copySelection())
     clearSelection()
   }
 
-  const handlePaste = (e: ReactClipboardEvent): void => {
-    e.preventDefault()
-    const text = e.clipboardData.getData('text/plain')
-    if (!text) return
-    pasteAt(selection.focus.row, selection.focus.col, text)
+  // --- Editing-mode keyboard handling (cell's own textarea has focus) -----
+  const handleEditKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
+    // The editor textarea is nested inside the grid wrapper, which has its
+    // own onKeyDown for selection-mode navigation (unconditional arrows,
+    // Backspace/Delete-clears-cell, etc). Without stopping propagation here,
+    // every keystroke while editing would ALSO bubble up and re-trigger
+    // those grid-level handlers -- e.g. Backspace to delete a character
+    // would simultaneously wipe the cell via the wrapper's clearSelection().
+    e.stopPropagation()
+    const el = e.currentTarget
+    const { row, col } = selection.focus
+
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      commitAndMove(row + 1, col)
+      return
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      commitAndMove(row, col + (e.shiftKey ? -1 : 1))
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      stopEditing(false)
+      focusWrapper()
+      return
+    }
+
+    if (e.key === 'ArrowLeft') {
+      if (el.selectionStart === 0 && el.selectionEnd === 0) {
+        e.preventDefault()
+        commitAndMove(row, col - 1)
+      }
+      return
+    }
+    if (e.key === 'ArrowRight') {
+      const len = el.value.length
+      if (el.selectionStart === len && el.selectionEnd === len) {
+        e.preventDefault()
+        commitAndMove(row, col + 1)
+      }
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      const columnsEstimate = estimateColumnsForTextarea(el)
+      if (isCaretOnFirstVisualLine(el.value, el.selectionStart, columnsEstimate)) {
+        e.preventDefault()
+        commitAndMove(row - 1, col)
+      }
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      const columnsEstimate = estimateColumnsForTextarea(el)
+      if (isCaretOnLastVisualLine(el.value, el.selectionStart, columnsEstimate)) {
+        e.preventDefault()
+        commitAndMove(row + 1, col)
+      }
+      return
+    }
   }
 
   // --- Column resizing -------------------------------------------------
@@ -337,6 +436,7 @@ export default function Grid({
 
   const handleResizeStart = (columnId: string, e: ReactMouseEvent): void => {
     e.preventDefault()
+    e.stopPropagation()
     resizingRef.current = { columnId, startX: e.clientX, startWidth: widthFor(columnId) }
     window.addEventListener('mousemove', handleResizeMove)
     window.addEventListener('mouseup', handleResizeEnd)
@@ -357,18 +457,16 @@ export default function Grid({
   const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
 
   return (
-    <div className="grid-wrapper" ref={tableWrapperRef}>
-      <textarea
-        ref={focusSinkRef}
-        className="grid-focus-sink"
-        onKeyDown={handleGridKeyDown}
-        onChange={() => {}}
-        onCopy={handleCopy}
-        onCut={handleCut}
-        onPaste={handlePaste}
-        value=""
-        aria-hidden
-      />
+    <div
+      className="grid-wrapper"
+      data-testid="grid-wrapper"
+      ref={gridWrapperRef}
+      tabIndex={0}
+      onKeyDown={handleGridKeyDown}
+      onPaste={handleGridPaste}
+      onCopy={handleGridCopy}
+      onCut={handleGridCut}
+    >
       <table className="grid-table">
         <colgroup>
           <col className="row-header-col" />
@@ -417,6 +515,8 @@ export default function Grid({
                   return (
                     <td
                       key={c.id}
+                      data-row={row}
+                      data-col={col}
                       className={[
                         'grid-cell',
                         isSelected ? 'cell-selected' : '',
