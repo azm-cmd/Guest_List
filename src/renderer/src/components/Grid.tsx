@@ -10,7 +10,10 @@ import {
 } from 'react'
 import {
   buildGridColumns,
+  customFieldIdForColumn,
   getGuestField,
+  moveColumnId,
+  orderGridColumns,
   setGuestField,
   type CustomFieldDef,
   type Guest
@@ -39,11 +42,21 @@ interface GridProps {
   guests: Guest[]
   columnWidths: Record<string, number>
   customFieldDefs: CustomFieldDef[]
+  columnOrder: string[]
   searchQuery: string
   onUpdateGuests: (updater: (guests: Guest[]) => Guest[]) => void
   onColumnWidthChange: (columnId: string, width: number) => void
+  onReorderColumns: (order: string[]) => void
+  onDeleteCustomField: (fieldId: string) => void
   onUndo: () => void
   onRedo: () => void
+}
+
+const COLUMN_DRAG_THRESHOLD_PX = 6
+
+interface ColumnDragState {
+  columnId: string
+  overColumnId: string | null
 }
 
 function matchesSearch(guest: Guest, query: string): boolean {
@@ -91,13 +104,17 @@ export default function Grid({
   guests,
   columnWidths,
   customFieldDefs,
+  columnOrder,
   searchQuery,
   onUpdateGuests,
   onColumnWidthChange,
+  onReorderColumns,
+  onDeleteCustomField,
   onUndo,
   onRedo
 }: GridProps): JSX.Element {
-  const columns = useMemo(() => buildGridColumns(customFieldDefs), [customFieldDefs])
+  const naturalColumns = useMemo(() => buildGridColumns(customFieldDefs), [customFieldDefs])
+  const columns = useMemo(() => orderGridColumns(naturalColumns, columnOrder), [naturalColumns, columnOrder])
   const rowCount = totalRowCount(guests.length)
 
   const [selection, setSelection] = useState<SelectionRange>({
@@ -107,7 +124,12 @@ export default function Grid({
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null)
   const [draftValue, setDraftValue] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [columnMenu, setColumnMenu] = useState<{ columnId: string; x: number; y: number } | null>(null)
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null)
+  const [columnDrag, setColumnDrag] = useState<ColumnDragState | null>(null)
+  const columnDragRef = useRef<{ columnId: string; startX: number; startY: number; dragging: boolean } | null>(
+    null
+  )
 
   const isMouseSelecting = useRef(false)
   const dragModeRef = useRef<'select' | 'pending-move' | 'move'>('select')
@@ -262,6 +284,7 @@ export default function Grid({
   const handleCellMouseDown = (row: number, col: number, shiftKey: boolean): void => {
     if (editingCell) stopEditing(true)
     setContextMenu(null)
+    setColumnMenu(null)
     const current = normalizeSelection(selection)
     const insideSelection =
       !shiftKey && row >= current.rowStart && row <= current.rowEnd && col >= current.colStart && col <= current.colEnd
@@ -635,7 +658,102 @@ export default function Grid({
     onColumnWidthChange(columnId, autoFitColumnWidth(def.label, values, referenceEl))
   }
 
+  // --- Column header: select / action menu / drag-to-reorder --------------
+  //
+  // A single mousedown on a header is ambiguous until it either releases in
+  // place (a click -> select the column) or moves past a small threshold
+  // (a drag -> reorder). This mirrors the cell move-drag pattern above, and
+  // deliberately requires that threshold so reordering (uncommon) can't be
+  // triggered by an ordinary click (common).
+  const selectColumn = useCallback(
+    (columnId: string) => {
+      const colIndex = columns.findIndex((c) => c.id === columnId)
+      if (colIndex === -1) return
+      setSelection({ anchor: { row: 0, col: colIndex }, focus: { row: rowCount - 1, col: colIndex } })
+      focusWrapper()
+    },
+    [columns, rowCount]
+  )
+
+  const handleHeaderMouseDown = (columnId: string, e: ReactMouseEvent): void => {
+    if (e.button !== 0) return
+    e.preventDefault() // avoid native text-selection drag across header labels
+    if (editingCell) stopEditing(true)
+    setContextMenu(null)
+    setColumnMenu(null)
+    columnDragRef.current = { columnId, startX: e.clientX, startY: e.clientY, dragging: false }
+  }
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent): void => {
+      const drag = columnDragRef.current
+      if (!drag) return
+      if (!drag.dragging) {
+        const distance = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY)
+        if (distance < COLUMN_DRAG_THRESHOLD_PX) return
+        drag.dragging = true
+        setColumnDrag({ columnId: drag.columnId, overColumnId: drag.columnId })
+      }
+      // e.target for a mousemove is normally an Element, but isn't guaranteed
+      // to be one (e.g. it can be the document during fast pointer movement
+      // that briefly exits the viewport) -- guard defensively.
+      const eventTarget = e.target instanceof Element ? e.target : null
+      const target = eventTarget?.closest<HTMLElement>('th[data-column-id]')
+      const overId = target?.dataset.columnId
+      if (overId) setColumnDrag((prev) => (prev ? { ...prev, overColumnId: overId } : prev))
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    return () => window.removeEventListener('mousemove', onMouseMove)
+  }, [])
+
+  useEffect(() => {
+    const onMouseUp = (): void => {
+      const drag = columnDragRef.current
+      if (!drag) return
+      if (drag.dragging) {
+        if (columnDrag?.overColumnId && columnDrag.overColumnId !== drag.columnId) {
+          onReorderColumns(moveColumnId(columnOrder, drag.columnId, columnDrag.overColumnId))
+        }
+      } else {
+        // Released without ever passing the drag threshold: an ordinary click.
+        selectColumn(drag.columnId)
+      }
+      columnDragRef.current = null
+      setColumnDrag(null)
+    }
+    window.addEventListener('mouseup', onMouseUp)
+    return () => window.removeEventListener('mouseup', onMouseUp)
+  }, [columnDrag, columnOrder, onReorderColumns, selectColumn])
+
+  const openColumnMenu = (columnId: string, e: ReactMouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    selectColumn(columnId)
+    setColumnMenu({ columnId, x: e.clientX, y: e.clientY })
+  }
+
+  const columnMenuItemsFor = (columnId: string): ContextMenuItem[] => {
+    const def = columns.find((c) => c.id === columnId)
+    const fieldId = def ? customFieldIdForColumn(def) : null
+    return [
+      {
+        label: 'Delete Column',
+        disabled: !fieldId,
+        disabledReason: "Built-in columns can't be deleted",
+        onSelect: () => {
+          if (!def || !fieldId) return
+          const confirmed = window.confirm(
+            `Delete the "${def.label}" column? This removes it and its data from every guest. This can't be undone.`
+          )
+          if (confirmed) onDeleteCustomField(fieldId)
+        }
+      }
+    ]
+  }
+
   const { rowStart, rowEnd, colStart, colEnd } = normalizeSelection(selection)
+  const isColumnFullySelected = (col: number): boolean =>
+    colStart === col && colEnd === col && rowStart === 0 && rowEnd === rowCount - 1
   const moveDestRect: CellRect | null = moveDrag
     ? (() => {
         const dest = computeMoveDestinationTopLeft(moveDrag.source, moveDrag.grab, moveDrag.hover, columns.length)
@@ -671,9 +789,33 @@ export default function Grid({
         <thead>
           <tr>
             <th className="row-header-cell" />
-            {columns.map((c) => (
-              <th key={c.id} className="col-header">
-                <span>{c.label}</span>
+            {columns.map((c, col) => (
+              <th
+                key={c.id}
+                data-column-id={c.id}
+                className={[
+                  'col-header',
+                  isColumnFullySelected(col) ? 'col-header-selected' : '',
+                  columnDrag?.columnId === c.id ? 'col-header-dragging' : '',
+                  columnDrag && columnDrag.columnId !== c.id && columnDrag.overColumnId === c.id
+                    ? 'col-header-drop-target'
+                    : ''
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onMouseDown={(e) => handleHeaderMouseDown(c.id, e)}
+              >
+                <span className="col-header-label">{c.label}</span>
+                <button
+                  type="button"
+                  className="col-menu-button"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => openColumnMenu(c.id, e)}
+                  aria-label={`${c.label} column options`}
+                  title="Column options"
+                >
+                  ⋮
+                </button>
                 <div
                   className="col-resize-handle"
                   onMouseDown={(e) => handleResizeStart(c.id, e)}
@@ -773,6 +915,14 @@ export default function Grid({
 
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} items={contextMenuItems} onClose={() => setContextMenu(null)} />
+      )}
+      {columnMenu && (
+        <ContextMenu
+          x={columnMenu.x}
+          y={columnMenu.y}
+          items={columnMenuItemsFor(columnMenu.columnId)}
+          onClose={() => setColumnMenu(null)}
+        />
       )}
     </div>
   )

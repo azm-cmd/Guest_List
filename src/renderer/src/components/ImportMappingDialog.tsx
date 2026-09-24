@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { slugifyFieldId, type CustomFieldDef, type GuestFieldPath } from '@shared/types'
 import type { ImportedTable } from '@shared/import'
 import { guessColumnMapping } from '@shared/import'
+import TextPromptModal from './TextPromptModal'
 
 interface ImportMappingDialogProps {
   table: ImportedTable
@@ -37,28 +38,35 @@ export default function ImportMappingDialog({
   )
   // Custom columns created during THIS import session (in addition to any that already existed).
   const [newCustomFields, setNewCustomFields] = useState<CustomFieldDef[]>([])
+  // Which source column (if any) is currently prompting for a new column name.
+  const [pendingNewColumnIndex, setPendingNewColumnIndex] = useState<number | null>(null)
 
   const allCustomFields = [...existingCustomFields, ...newCustomFields]
 
   const setColumnField = (index: number, value: string): void => {
     if (value === NEW_COLUMN_SENTINEL) {
-      const label = window.prompt('Name for the new column:')?.trim()
-      if (!label) return // cancelled or empty -- leave this column's mapping unchanged
-      const id = slugifyFieldId(
-        label,
-        allCustomFields.map((d) => d.id)
-      )
-      setNewCustomFields((prev) => [...prev, { id, label }])
-      setMapping((prev) => {
-        const next = prev.slice()
-        next[index] = `custom.${id}`
-        return next
-      })
+      setPendingNewColumnIndex(index)
       return
     }
     setMapping((prev) => {
       const next = prev.slice()
       next[index] = value === '' ? null : (value as GuestFieldPath)
+      return next
+    })
+  }
+
+  const createNewColumn = (label: string): void => {
+    const index = pendingNewColumnIndex
+    setPendingNewColumnIndex(null)
+    if (index === null) return
+    const id = slugifyFieldId(
+      label,
+      allCustomFields.map((d) => d.id)
+    )
+    setNewCustomFields((prev) => [...prev, { id, label }])
+    setMapping((prev) => {
+      const next = prev.slice()
+      next[index] = `custom.${id}`
       return next
     })
   }
@@ -130,6 +138,17 @@ export default function ImportMappingDialog({
           </button>
         </div>
       </div>
+
+      {pendingNewColumnIndex !== null && (
+        <TextPromptModal
+          title="New Column"
+          label="Column name"
+          placeholder="e.g. Phone, Notes"
+          confirmLabel="Create"
+          onConfirm={createNewColumn}
+          onCancel={() => setPendingNewColumnIndex(null)}
+        />
+      )}
     </div>
   )
 }

@@ -165,6 +165,48 @@ export function slugifyFieldId(label: string, existingIds: string[]): string {
   return `${base}-${n}`
 }
 
+/** True for a built-in column (Title, First Name, ...); false for a user-created custom column. */
+export function isBuiltInColumn(columnDef: GridColumnDef): boolean {
+  return !columnDef.field.startsWith('custom.')
+}
+
+/** The raw custom-field id (e.g. "spouse-name") behind a custom column, or null for a built-in column. */
+export function customFieldIdForColumn(columnDef: GridColumnDef): string | null {
+  return columnDef.field.startsWith('custom.') ? columnDef.field.slice('custom.'.length) : null
+}
+
+/**
+ * Apply a saved display order to a column list, self-healing against a
+ * stale/missing order: ids no longer present (a deleted custom column) are
+ * dropped, and ids not yet present (a newly added custom column, or no
+ * saved order at all) are appended at the end in their natural order.
+ */
+export function orderGridColumns(columns: GridColumnDef[], order: string[]): GridColumnDef[] {
+  const byId = new Map(columns.map((c) => [c.id, c]))
+  const ordered: GridColumnDef[] = []
+  for (const id of order) {
+    const c = byId.get(id)
+    if (c) {
+      ordered.push(c)
+      byId.delete(id)
+    }
+  }
+  for (const c of columns) {
+    if (byId.has(c.id)) ordered.push(c)
+  }
+  return ordered
+}
+
+/** Move `columnId` to sit immediately before `targetId` in a column-id order array. */
+export function moveColumnId(order: string[], columnId: string, targetId: string): string[] {
+  if (columnId === targetId) return order
+  const next = order.filter((id) => id !== columnId)
+  const targetIndex = next.indexOf(targetId)
+  if (targetIndex === -1) return order
+  next.splice(targetIndex, 0, columnId)
+  return next
+}
+
 // ---------------------------------------------------------------------------
 // Export system
 // ---------------------------------------------------------------------------
@@ -285,6 +327,8 @@ export interface GuestListDocument {
   exportPresets: ExportPreset[]
   columnWidths: Record<string, number>
   customFieldDefs: CustomFieldDef[]
+  /** Column display order, as column ids (see GridColumnDef.id). Self-healing via orderGridColumns. */
+  columnOrder: string[]
 }
 
 export function emptyDocument(title = 'Untitled Guest List'): GuestListDocument {
@@ -298,19 +342,21 @@ export function emptyDocument(title = 'Untitled Guest List'): GuestListDocument 
     guests: [],
     exportPresets: builtInPresets(),
     columnWidths: {},
-    customFieldDefs: []
+    customFieldDefs: [],
+    columnOrder: DEFAULT_GRID_COLUMNS.map((c) => c.id)
   }
 }
 
 /**
  * Normalize a document loaded from disk so older files (saved before custom
- * columns existed, or before a guest had a `customFields` bag) still load
- * cleanly instead of crashing on missing fields.
+ * columns/column ordering existed, or before a guest had a `customFields`
+ * bag) still load cleanly instead of crashing on missing fields.
  */
 export function migrateDocument(doc: GuestListDocument): GuestListDocument {
   return {
     ...doc,
     customFieldDefs: doc.customFieldDefs ?? [],
+    columnOrder: doc.columnOrder ?? [],
     guests: doc.guests.map((g) => (g.customFields ? g : { ...g, customFields: {} }))
   }
 }

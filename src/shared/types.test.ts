@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildGridColumns,
+  customFieldIdForColumn,
   DEFAULT_GRID_COLUMNS,
   emptyGuest,
   exportSourceLabel,
   getGuestField,
   isBlankGuest,
+  isBuiltInColumn,
   migrateDocument,
+  moveColumnId,
+  orderGridColumns,
   setGuestField,
   slugifyFieldId,
   emptyDocument,
-  type CustomFieldDef
+  type CustomFieldDef,
+  type GridColumnDef
 } from './types'
 
 describe('custom fields on Guest', () => {
@@ -92,11 +97,13 @@ describe('exportSourceLabel', () => {
 })
 
 describe('migrateDocument', () => {
-  it('defaults customFieldDefs and per-guest customFields for older saved files', () => {
+  it('defaults customFieldDefs, columnOrder and per-guest customFields for older saved files', () => {
     const legacyDoc = emptyDocument()
     // Simulate a file saved before this feature existed.
     // @ts-expect-error intentionally constructing a legacy shape
     delete legacyDoc.customFieldDefs
+    // @ts-expect-error intentionally constructing a legacy shape
+    delete legacyDoc.columnOrder
     const legacyGuest = emptyGuest('1')
     // @ts-expect-error intentionally constructing a legacy shape
     delete legacyGuest.customFields
@@ -104,11 +111,154 @@ describe('migrateDocument', () => {
 
     const migrated = migrateDocument(legacyDoc)
     expect(migrated.customFieldDefs).toEqual([])
+    expect(migrated.columnOrder).toEqual([])
     expect(migrated.guests[0].customFields).toEqual({})
+    // Even with an empty saved order, the columns still resolve correctly (self-healing).
+    expect(orderGridColumns(buildGridColumns([]), migrated.columnOrder)).toEqual(DEFAULT_GRID_COLUMNS)
   })
 
   it('leaves an already-current document unchanged', () => {
     const doc = emptyDocument()
     expect(migrateDocument(doc)).toEqual(doc)
+  })
+})
+
+describe('isBuiltInColumn / customFieldIdForColumn', () => {
+  it('identifies built-in vs. custom columns', () => {
+    expect(isBuiltInColumn(DEFAULT_GRID_COLUMNS[0])).toBe(true)
+    const custom: GridColumnDef = { id: 'custom-notes', label: 'Notes', field: 'custom.notes', defaultWidth: 130 }
+    expect(isBuiltInColumn(custom)).toBe(false)
+  })
+
+  it('extracts the raw field id from a custom column, and null for a built-in one', () => {
+    const custom: GridColumnDef = { id: 'custom-notes', label: 'Notes', field: 'custom.notes', defaultWidth: 130 }
+    expect(customFieldIdForColumn(custom)).toBe('notes')
+    expect(customFieldIdForColumn(DEFAULT_GRID_COLUMNS[0])).toBeNull()
+  })
+})
+
+describe('orderGridColumns', () => {
+  const columns = buildGridColumns([
+    { id: 'spouse-name', label: 'Spouse Name' },
+    { id: 'notes', label: 'Notes' }
+  ])
+
+  it('applies a saved order', () => {
+    const order = ['email', 'firstName', 'custom-notes']
+    const ordered = orderGridColumns(columns, order)
+    expect(ordered.map((c) => c.id)).toEqual([
+      'email',
+      'firstName',
+      'custom-notes',
+      // everything else appended in natural order
+      'title',
+      'lastName',
+      'address1',
+      'address2',
+      'city',
+      'state',
+      'zip',
+      'custom-spouse-name'
+    ])
+  })
+
+  it('self-heals: drops stale ids and appends new/unlisted ones at the end', () => {
+    const order = ['firstName', 'custom-deleted-column', 'lastName']
+    const ordered = orderGridColumns(columns, order)
+    expect(ordered.map((c) => c.id)).not.toContain('custom-deleted-column')
+    expect(ordered[0].id).toBe('firstName')
+    expect(ordered[1].id).toBe('lastName')
+    expect(ordered.length).toBe(columns.length)
+  })
+
+  it('an empty order falls back to the natural (built-in then custom) order', () => {
+    expect(orderGridColumns(columns, [])).toEqual(columns)
+  })
+})
+
+describe('moveColumnId', () => {
+  it('moves a column to sit immediately before the target', () => {
+    const order = ['a', 'b', 'c', 'd']
+    expect(moveColumnId(order, 'd', 'b')).toEqual(['a', 'd', 'b', 'c'])
+    expect(moveColumnId(order, 'a', 'd')).toEqual(['b', 'c', 'a', 'd'])
+  })
+
+  it('is a no-op when moving a column onto itself', () => {
+    const order = ['a', 'b', 'c']
+    expect(moveColumnId(order, 'b', 'b')).toEqual(order)
+  })
+
+  it('is a no-op (returns the original order) if the target id is not found', () => {
+    const order = ['a', 'b', 'c']
+    expect(moveColumnId(order, 'a', 'missing')).toBe(order)
+  })
+})
+
+describe('save/reopen persistence (JSON round-trip, as the .guestlist file format)', () => {
+  function roundTrip(doc: ReturnType<typeof emptyDocument>): ReturnType<typeof emptyDocument> {
+    return migrateDocument(JSON.parse(JSON.stringify(doc)))
+  }
+
+  it('preserves custom column definitions and their guest data', () => {
+    let doc = emptyDocument()
+    doc = {
+      ...doc,
+      customFieldDefs: [{ id: 'notes', label: 'Notes' }],
+      columnOrder: [...doc.columnOrder, 'custom-notes']
+    }
+    let guest = emptyGuest('1')
+    guest = setGuestField(guest, 'firstName', 'Jane')
+    guest = setGuestField(guest, 'custom.notes', 'Vegetarian')
+    doc = { ...doc, guests: [guest] }
+
+    const reopened = roundTrip(doc)
+    expect(reopened.customFieldDefs).toEqual([{ id: 'notes', label: 'Notes' }])
+    expect(getGuestField(reopened.guests[0], 'firstName')).toBe('Jane')
+    expect(getGuestField(reopened.guests[0], 'custom.notes')).toBe('Vegetarian')
+  })
+
+  it('preserves a reordered column order exactly', () => {
+    const customOrder = ['email', 'title', 'firstName', 'lastName', 'address1', 'address2', 'city', 'state', 'zip']
+    let doc = emptyDocument()
+    doc = { ...doc, columnOrder: customOrder }
+
+    const reopened = roundTrip(doc)
+    expect(reopened.columnOrder).toEqual(customOrder)
+    expect(orderGridColumns(buildGridColumns([]), reopened.columnOrder).map((c) => c.id)).toEqual(customOrder)
+  })
+
+  it('preserves multiple custom columns (e.g. Phone and Notes) end to end', () => {
+    let doc = emptyDocument()
+    doc = {
+      ...doc,
+      customFieldDefs: [
+        { id: 'phone', label: 'Phone' },
+        { id: 'notes', label: 'Notes' }
+      ],
+      columnOrder: [...doc.columnOrder, 'custom-phone', 'custom-notes']
+    }
+    let guest = emptyGuest('1')
+    guest = setGuestField(guest, 'firstName', 'Jane')
+    guest = setGuestField(guest, 'custom.phone', '555-1234')
+    guest = setGuestField(guest, 'custom.notes', 'Vegetarian')
+    doc = { ...doc, guests: [guest] }
+
+    const reopened = roundTrip(doc)
+    const columns = orderGridColumns(buildGridColumns(reopened.customFieldDefs), reopened.columnOrder)
+    expect(columns.map((c) => c.label)).toContain('Phone')
+    expect(columns.map((c) => c.label)).toContain('Notes')
+    expect(getGuestField(reopened.guests[0], 'custom.phone')).toBe('555-1234')
+    expect(getGuestField(reopened.guests[0], 'custom.notes')).toBe('Vegetarian')
+  })
+
+  it('does not disturb built-in field values when custom columns are present', () => {
+    let doc = emptyDocument()
+    doc = { ...doc, customFieldDefs: [{ id: 'notes', label: 'Notes' }] }
+    let guest = emptyGuest('1')
+    guest = setGuestField(guest, 'email', 'jane@example.com')
+    doc = { ...doc, guests: [guest] }
+
+    const reopened = roundTrip(doc)
+    expect(getGuestField(reopened.guests[0], 'email')).toBe('jane@example.com')
   })
 })

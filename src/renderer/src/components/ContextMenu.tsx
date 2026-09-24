@@ -3,6 +3,9 @@ import { useEffect, useRef, type CSSProperties } from 'react'
 export interface ContextMenuItem {
   label: string
   onSelect: () => void
+  disabled?: boolean
+  /** Shown as a title/tooltip when disabled, explaining why (e.g. "Built-in columns can't be deleted"). */
+  disabledReason?: string
 }
 
 interface ContextMenuProps {
@@ -51,7 +54,10 @@ export default function ContextMenu({ x, y, items, onClose }: ContextMenuProps):
           type="button"
           className="context-menu-item"
           role="menuitem"
+          disabled={item.disabled}
+          title={item.disabled ? item.disabledReason : undefined}
           onClick={() => {
+            if (item.disabled) return
             item.onSelect()
             onClose()
           }}

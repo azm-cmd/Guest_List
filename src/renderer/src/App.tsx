@@ -259,9 +259,12 @@ export default function App(): JSX.Element {
         guests={controller.guests}
         columnWidths={controller.doc.columnWidths}
         customFieldDefs={controller.doc.customFieldDefs}
+        columnOrder={controller.doc.columnOrder}
         searchQuery={searchQuery}
         onUpdateGuests={controller.updateGuests}
         onColumnWidthChange={controller.setColumnWidth}
+        onReorderColumns={controller.setColumnOrder}
+        onDeleteCustomField={controller.deleteCustomField}
         onUndo={controller.undo}
         onRedo={controller.redo}
       />

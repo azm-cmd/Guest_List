@@ -1,39 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { useState } from 'react'
-import Grid from './Grid'
-import { emptyGuest, setGuestField, type CustomFieldDef, type Guest } from '@shared/types'
-
-function guestWith(fields: Record<string, string>): Guest {
-  let g = emptyGuest(crypto.randomUUID())
-  for (const [k, v] of Object.entries(fields)) {
-    g = setGuestField(g, k as never, v)
-  }
-  return g
-}
-
-function Harness({
-  initialGuests = [],
-  customFieldDefs = []
-}: {
-  initialGuests?: Guest[]
-  customFieldDefs?: CustomFieldDef[]
-}): JSX.Element {
-  const [guests, setGuests] = useState<Guest[]>(initialGuests)
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
-  return (
-    <Grid
-      guests={guests}
-      columnWidths={columnWidths}
-      customFieldDefs={customFieldDefs}
-      searchQuery=""
-      onUpdateGuests={(updater) => setGuests((prev) => updater(prev))}
-      onColumnWidthChange={(id, w) => setColumnWidths((prev) => ({ ...prev, [id]: w }))}
-      onUndo={() => {}}
-      onRedo={() => {}}
-    />
-  )
-}
+import { GridHarness as Harness, guestWith } from './gridTestHarness'
 
 // Grid columns (see DEFAULT_GRID_COLUMNS): 0=Title 1=FirstName 2=LastName
 // 3=Address1 4=Address2 5=City 6=State 7=Zip 8=Email

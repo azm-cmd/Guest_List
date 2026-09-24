@@ -1,37 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { useState } from 'react'
-import Grid from './Grid'
-import { emptyGuest, setGuestField, type CustomFieldDef, type Guest } from '@shared/types'
-
-function guestWith(fields: Record<string, string>): Guest {
-  let g = emptyGuest(crypto.randomUUID())
-  for (const [k, v] of Object.entries(fields)) g = setGuestField(g, k as never, v)
-  return g
-}
-
-function Harness({
-  initialGuests = [],
-  customFieldDefs = []
-}: {
-  initialGuests?: Guest[]
-  customFieldDefs?: CustomFieldDef[]
-}): JSX.Element {
-  const [guests, setGuests] = useState<Guest[]>(initialGuests)
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
-  return (
-    <Grid
-      guests={guests}
-      columnWidths={columnWidths}
-      customFieldDefs={customFieldDefs}
-      searchQuery=""
-      onUpdateGuests={(updater) => setGuests((prev) => updater(prev))}
-      onColumnWidthChange={(id, w) => setColumnWidths((prev) => ({ ...prev, [id]: w }))}
-      onUndo={() => {}}
-      onRedo={() => {}}
-    />
-  )
-}
+import { GridHarness as Harness, guestWith } from './gridTestHarness'
+import type { CustomFieldDef } from '@shared/types'
 
 function cellAt(row: number, col: number): HTMLElement {
   const el = document.querySelector(`[data-row="${row}"][data-col="${col}"]`)
